@@ -31,9 +31,12 @@ ai-company = "ai_company.cli:app"
 [tool.hatch.build.targets.wheel]
 packages = ["src/ai_company"]
 
+[tool.hatch.build.targets.wheel.sources]
+"src/ai_company" = "ai_company"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 
 [tool.ruff]
 line-length = 100
