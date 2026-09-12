@@ -1,0 +1,28 @@
+# Future Extensions
+
+- Git worktree per Worker
+- Docker sandbox
+- multi-repository
+- GitHub Issues / PR
+- CI/CD
+- Slack / email notifications
+- 1日2回の要約
+- Corporate Memory
+- Decision Log
+- PRD Agent
+- FDE Agent
+- Product Agent
+- Architect Agent
+- Reviewer Agent
+- Security Agent
+- UX Evaluator
+- Performance Evaluator
+- model routing
+- cost optimization
+- worker profile scoring
+- prompt profile versioning
+- project portfolio management
+- cron / event-driven jobs
+- Web UI
+- API
+- MCP

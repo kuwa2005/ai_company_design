@@ -1,0 +1,28 @@
+budget:
+  hourly:
+    max_runs: 20
+    max_cost_usd: 5
+  daily:
+    max_runs: 100
+    max_cost_usd: 20
+  monthly:
+    soft_limit_usd: 200
+    hard_limit_usd: 250
+
+usage_policy:
+  normal:
+    threshold: 0.00
+    max_workers: 8
+  warning:
+    threshold: 0.60
+    max_workers: 4
+  high:
+    threshold: 0.80
+    max_workers: 2
+  critical:
+    threshold: 0.95
+    max_workers: 1
+    priority_minimum: 80
+  exhausted:
+    threshold: 1.00
+    max_workers: 0

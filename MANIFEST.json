@@ -1,0 +1,28 @@
+{
+  "name": "AI Company Cursor Workforce Orchestrator",
+  "version": "0.1-design",
+  "files": [
+    "00_START_HERE.md",
+    "01_PRODUCT_VISION.md",
+    "02_SYSTEM_ARCHITECTURE.md",
+    "03_SECRETARY_AGENT.md",
+    "04_TASK_QUEUE_AND_SCHEDULER.md",
+    "05_COST_GOVERNOR.md",
+    "06_CURSOR_WORKER_LIFECYCLE.md",
+    "07_DATA_MODEL.md",
+    "08_PERMISSION_APPROVAL_AUDIT.md",
+    "09_CLI_AND_USER_EXPERIENCE.md",
+    "10_IMPLEMENTATION_ROADMAP.md",
+    "11_MVP_ACCEPTANCE_TESTS.md",
+    "12_SECURITY_AND_FAILURE_MODES.md",
+    "13_FUTURE_EXTENSIONS.md",
+    "README.md",
+    "config/budget.yaml",
+    "config/cursor_runner.yaml",
+    "config/permissions.yaml",
+    "config/settings.yaml",
+    "prompts/coding_worker.md",
+    "prompts/reviewer.md",
+    "prompts/secretary.md"
+  ]
+}

@@ -1,0 +1,17 @@
+scheduler:
+  max_concurrent_workers: 4
+  poll_interval_seconds: 2
+  max_workers_per_project: 3
+
+worker:
+  heartbeat_seconds: 30
+  idle_timeout_minutes: 10
+  hard_timeout_minutes: 45
+
+retry:
+  default_max_retries: 2
+
+circuit_breaker:
+  failure_threshold: 5
+  window_minutes: 10
+  cooldown_minutes: 30

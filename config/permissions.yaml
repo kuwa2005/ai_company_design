@@ -1,0 +1,20 @@
+profiles:
+  human_owner:
+    permissions: ["*"]
+  secretary:
+    permissions:
+      - task.create
+      - task.prioritize
+      - staffing.request
+      - project.report
+  coding_worker:
+    permissions:
+      - code.edit
+      - code.commit
+      - test.execute
+      - shell.safe
+  reviewer:
+    permissions:
+      - code.read
+      - test.execute
+      - task.review
