@@ -448,8 +448,8 @@ def run_cursor_worker(
     if timeout is None:
         timeout = float(cfg.cursor_runner.timeout_minutes) * 60.0
     progress(
-        f"CURSOR invoke  {task.id}  「{task.title}」  "
-        f"timeout={int(timeout)}s  workspace={cfg.cursor_runner.workspace or project_root()}"
+        f"Cursor起動  {task.id}  「{task.title}」  "
+        f"制限時間={int(timeout)}秒  作業場所={cfg.cursor_runner.workspace or project_root()}"
     )
 
     capture = run_cursor_cli(
@@ -477,9 +477,9 @@ def run_cursor_worker(
         and parsed.result is not None
     )
     progress(
-        f"CURSOR return  {task.id}  exit={capture.exit_code}  "
-        f"timed_out={capture.timed_out}  parse_ok={parsed.ok}  "
-        f"parse_error={parsed.error}"
+        f"Cursor終了  {task.id}  終了コード={capture.exit_code}  "
+        f"タイムアウト={capture.timed_out}  解析成功={parsed.ok}  "
+        f"解析エラー={parsed.error}"
     )
     result_json: dict[str, Any] = parsed.result or {
         "status": "failed",

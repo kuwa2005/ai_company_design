@@ -100,27 +100,29 @@ def start_cmd(
         raise typer.BadParameter("runner must be 'mock' or 'cursor'")
     ensure_runtime_ready()
     from ai_company.services.progress import set_progress
+    from ai_company.ui_ja import role_ja, runner_ja, status_ja
 
     if autonomous or dispatch:
         set_progress(not quiet)
     with session_scope() as session:
         result = start_goal(session, goal)
-        console.print(f"[green]Project[/green] {result.project.id}  {result.project.name}")
-        console.print(f"Tasks created: {len(result.tasks)}")
-        console.print(f"Staffing requests: {len(result.staffing)}")
-        console.print(f"Validation proposals: {len(result.validation_requests)}")
+        console.print(f"[green]案件[/green] {result.project.id}  {result.project.name}")
+        console.print(f"作成したタスク: {len(result.tasks)}")
+        console.print(f"人員依頼: {len(result.staffing)}")
+        console.print(f"検証提案: {len(result.validation_requests)}")
         for t in result.tasks:
             console.print(
-                f"  - [{t.status}] {t.id}  {t.title}  role={t.role_required} "
-                f"risk={t.risk_level}"
+                f"  - [{status_ja(t.status)}] {t.id}  {t.title}  "
+                f"役割={role_ja(t.role_required)}  リスク={t.risk_level}"
             )
         for s in result.staffing:
             console.print(
-                f"  - staffing {s.id}  role={s.role}  x{s.requested_count}  ({s.status})"
+                f"  - 人員 {s.id}  役割={role_ja(s.role)}  x{s.requested_count}  "
+                f"（{s.status}）"
             )
         for vr in result.validation_requests:
             console.print(
-                f"  - validation risk={vr.risk_level} required={vr.required_review_types}"
+                f"  - 検証提案 リスク={vr.risk_level} 必須={vr.required_review_types}"
             )
         console.print("")
         console.print(result.summary)
@@ -129,8 +131,8 @@ def start_cmd(
 
             console.print("")
             console.print(
-                "[cyan]Autonomous running…[/cyan] live progress on stderr "
-                "(Ctrl+C to stop)"
+                "[cyan]自動実行中…[/cyan] 進捗は随時表示されます "
+                "（Ctrl+C で停止）"
             )
             auto = run_autonomous(
                 session,
@@ -140,8 +142,9 @@ def start_cmd(
             )
             console.print("")
             console.print(
-                f"[cyan]Autonomous[/cyan] cycles={auto.cycles} started={auto.started_total} "
-                f"stopped={auto.stopped_reason} rc={auto.release_candidate_id}"
+                f"[cyan]自動実行[/cyan] サイクル={auto.cycles} "
+                f"開始数={auto.started_total} 停止理由={auto.stopped_reason} "
+                f"リリース候補={auto.release_candidate_id}"
             )
             console.print(human_summary(session, project_id=result.project.id))
         elif dispatch:
@@ -149,8 +152,8 @@ def start_cmd(
             sched = run_once(session, runner=runner)  # type: ignore[arg-type]
             console.print("")
             console.print(
-                f"[cyan]Dispatched via Scheduler[/cyan] runner={runner} "
-                f"started={sched.started} denied={sched.denied} throttled={sched.throttled}"
+                f"[cyan]スケジューラ実行[/cyan] 方式={runner_ja(runner)} "
+                f"開始={sched.started} 拒否={sched.denied} 抑制={sched.throttled}"
             )
             console.print(human_summary(session, project_id=result.project.id))
 
@@ -307,13 +310,13 @@ def worker_list() -> None:
 def budget_status() -> None:
     with session_scope() as session:
         snap = get_budget_snapshot(session)
-        console.print(f"Spent:    ${snap.spent:.2f}")
-        console.print(f"Reserved: ${snap.reserved:.2f}")
-        console.print(f"Usable:   ${snap.usable:.2f}")
-        console.print(f"Soft:     ${snap.soft_limit:.2f}  (usage={snap.soft_usage_ratio:.0%})")
-        console.print(f"Hard:     ${snap.hard_limit:.2f}")
-        console.print(f"Hourly:   {snap.hourly_runs} runs / ${snap.hourly_spent:.2f}")
-        console.print(f"Daily:    {snap.daily_runs} runs / ${snap.daily_spent:.2f}")
+        console.print(f"使用済み:   ${snap.spent:.2f}")
+        console.print(f"予約中:     ${snap.reserved:.2f}")
+        console.print(f"利用可能:   ${snap.usable:.2f}")
+        console.print(f"ソフト上限: ${snap.soft_limit:.2f}  （使用率={snap.soft_usage_ratio:.0%}）")
+        console.print(f"ハード上限: ${snap.hard_limit:.2f}")
+        console.print(f"直近1時間:  {snap.hourly_runs} 回 / ${snap.hourly_spent:.2f}")
+        console.print(f"本日:       {snap.daily_runs} 回 / ${snap.daily_spent:.2f}")
 
 
 @audit_app.command("list")

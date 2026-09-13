@@ -232,9 +232,11 @@ def run_once(
                 "runner": runner,
             },
         )
+        from ai_company.ui_ja import kind_ja, role_ja, runner_ja, status_ja
+
         progress(
-            f"START {task.kind}/{task.role_required}  {task.id}  "
-            f"「{task.title}」  runner={runner}  worker={worker.id}"
+            f"開始  {kind_ja(task.kind)}/{role_ja(task.role_required)}  {task.id}  "
+            f"「{task.title}」  方式={runner_ja(runner)}  ワーカー={worker.id}"
         )
         execution = dispatch_worker(
             session,
@@ -246,18 +248,18 @@ def run_once(
             timeout_seconds=timeout_seconds,
         )
         session.refresh(task)
-        outcome = "OK" if execution.success else "FAIL"
+        outcome = "成功" if execution.success else "失敗"
         extra = ""
         if execution.result_json:
             err = execution.result_json.get("parse_error")
             if err:
-                extra = f"  parse_error={err}"
+                extra = f"  解析エラー={err}"
             v = execution.result_json.get("verdict")
             if v:
-                extra += f"  verdict={v}"
+                extra += f"  判定={v}"
         progress(
-            f"DONE  {outcome}  {task.id}  status={task.status}  "
-            f"exec={execution.id}{extra}"
+            f"終了  {outcome}  {task.id}  状態={status_ja(task.status)}  "
+            f"実行={execution.id}{extra}"
         )
         release_lease(session, task)
         result.started += 1

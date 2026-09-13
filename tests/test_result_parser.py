@@ -146,3 +146,12 @@ def test_parse_for_kind_routes() -> None:
     assert parse_for_kind('{"verdict":"PASS"}', "reviewer").ok is True
     assert parse_for_kind('{"verdict":"PASS"}', "judge").ok is True
     assert parse_for_kind('{"status":"completed"}', "coding").ok is True
+
+
+def test_parse_status_done_alias() -> None:
+    parsed = parse_structured_result(
+        '{"status":"done","changed_files":["a.md"],"tests":{},"commit":null,"issues":[]}'
+    )
+    assert parsed.ok is True
+    assert parsed.result is not None
+    assert parsed.result["status"] == "completed"

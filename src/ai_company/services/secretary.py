@@ -426,7 +426,9 @@ def _task_counts(session: Session, project_id: str | None = None) -> Counter[str
 
 
 def human_summary(session: Session, *, project_id: str | None = None) -> str:
-    """Human-facing summary: Goal/Progress/Cost/Risk/Blocked — not a raw task dump."""
+    """人が読む状況要約（日本語）。"""
+    from ai_company.ui_ja import status_ja
+
     project: Project | None
     if project_id:
         project = session.get(Project, project_id)
@@ -450,42 +452,42 @@ def human_summary(session: Session, *, project_id: str | None = None) -> str:
     staffing_open = int(session.scalar(staffing_stmt) or 0)
 
     lines = [
-        "SECRETARY REPORT",
-        f"Project: {project.name if project else '(none)'}",
-        f"Goal: {project.goal if project else '-'}",
-        f"Status: {project.status if project else '-'}",
+        "【秘書レポート】",
+        f"案件: {project.name if project else '（なし）'}",
+        f"目標: {project.goal if project else '-'}",
+        f"状態: {status_ja(project.status if project else None)}",
         "",
-        "Progress:",
-        f"  DONE     {counts.get(TaskStatus.DONE, 0)}",
-        f"  RUNNING  {counts.get(TaskStatus.RUNNING, 0)}",
-        f"  READY    {counts.get(TaskStatus.READY, 0)}",
-        f"  WAITING  {counts.get(TaskStatus.WAITING, 0)}",
-        f"  REVIEW   {counts.get(TaskStatus.REVIEW_REQUIRED, 0)}",
-        f"  BLOCKED  {blocked}",
-        f"  DEFERRED {deferred}",
+        "進捗:",
+        f"  完了       {counts.get(TaskStatus.DONE, 0)}",
+        f"  実行中     {counts.get(TaskStatus.RUNNING, 0)}",
+        f"  実行待ち   {counts.get(TaskStatus.READY, 0)}",
+        f"  依存待ち   {counts.get(TaskStatus.WAITING, 0)}",
+        f"  検証待ち   {counts.get(TaskStatus.REVIEW_REQUIRED, 0)}",
+        f"  停止       {blocked}",
+        f"  予算待ち   {deferred}",
         "",
-        f"Workers active: {active}",
-        f"Staffing requests open: {staffing_open}",
-        f"Budget today: ${snap.daily_spent:.2f} / ${snap.soft_limit:.2f} soft-month",
-        f"Budget month usage: {snap.soft_usage_ratio:.0%} of soft "
-        f"(${snap.spent + snap.reserved:.2f} / ${snap.soft_limit:.2f})",
-        f"Hard remaining: ${snap.usable:.2f}",
-        f"Human decisions required: {decisions}",
+        f"稼働中ワーカー: {active}",
+        f"未承認の人員依頼: {staffing_open}",
+        f"本日の内部コスト: ${snap.daily_spent:.2f}（上限 ${snap.soft_limit:.2f}）",
+        f"月次使用率: {snap.soft_usage_ratio:.0%} "
+        f"（${snap.spent + snap.reserved:.2f} / ${snap.soft_limit:.2f}）",
+        f"ハード上限の残り: ${snap.usable:.2f}",
+        f"人間の判断が必要: {decisions}",
         "",
-        "Exceptions:",
+        "例外:",
         exception_digest(session, project_id=project.id if project else None),
     ]
     if decisions:
-        lines.append("Risk: blocked/deferred tasks need human or retry policy review.")
+        lines.append("リスク: 停止／予算待ちタスクがあります。判断または再実行が必要です。")
     else:
-        lines.append("Risk: none flagged by Secretary v1.")
-    lines.append("Note: Secretary cannot spawn workers; use scheduler / autonomous to dispatch.")
-    lines.append("Note: Coding self-report never equals DONE — Validation Gate required.")
+        lines.append("リスク: いま目立った問題はありません。")
+    lines.append("注: 秘書はワーカーを直接起動しません。スケジューラ／自動実行で進めます。")
+    lines.append("注: 実装の自己申告だけでは完了になりません。独立検証ゲートが必要です。")
     return "\n".join(lines)
 
 
 def exception_digest(session: Session, *, project_id: str | None = None) -> str:
-    """Exception-only view for no-look operation (M10 human interface)."""
+    """例外だけを日本語で列挙。"""
     from ai_company.db.models import Approval, JudgeDecision
 
     lines: list[str] = []
@@ -493,11 +495,11 @@ def exception_digest(session: Session, *, project_id: str | None = None) -> str:
     if project_id:
         task_stmt = task_stmt.where(Task.project_id == project_id)
     for t in session.scalars(task_stmt.limit(20)).all():
-        lines.append(f"- BLOCKED task {t.id}: {t.title}")
+        lines.append(f"- 停止タスク {t.id}: {t.title}")
 
     approval_stmt = select(Approval).where(Approval.status == "PENDING")
     for a in session.scalars(approval_stmt.limit(20)).all():
-        lines.append(f"- PENDING approval {a.id}: {a.action} ({a.reason[:80]})")
+        lines.append(f"- 承認待ち {a.id}: {a.action}（{a.reason[:80]}）")
 
     judge_stmt = select(JudgeDecision).where(JudgeDecision.verdict == "HUMAN_ESCALATION")
     for d in session.scalars(judge_stmt.limit(20)).all():
@@ -506,11 +508,11 @@ def exception_digest(session: Session, *, project_id: str | None = None) -> str:
             if parent is None or parent.project_id != project_id:
                 continue
         lines.append(
-            f"- HUMAN_ESCALATION judge {d.id} task={d.task_id} reasons={d.reasons}"
+            f"- 人間エスカレーション 判定{d.id} タスク={d.task_id} 理由={d.reasons}"
         )
 
     if not lines:
-        return "  (none)"
+        return "  （なし）"
     return "\n".join(lines)
 
 

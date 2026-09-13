@@ -42,8 +42,8 @@ def test_m6_risk_and_validation_proposal(db_session: Session, tmp_env: Path) -> 
     assert any("アーキテクチャ" in t.title for t in result.tasks)
     events = {e.event_type for e in db_session.scalars(select(AuditEvent)).all()}
     assert "validation_request_proposed" in events
-    assert "cannot spawn" in result.summary.lower() or "Cannot spawn" in result.summary
-    assert "Validation Gate" in result.summary or "self-report" in result.summary.lower()
+    assert "ワーカーを直接起動しません" in result.summary
+    assert "自己申告だけでは完了になりません" in result.summary
 
 
 def test_m7_specialist_roles_from_risk(db_session: Session, tmp_env: Path) -> None:

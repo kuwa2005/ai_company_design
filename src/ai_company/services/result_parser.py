@@ -114,6 +114,8 @@ def parse_structured_result(stdout: str) -> ParsedResult:
             return ParsedResult(ok=False, result=data, error=f"missing_field:{key}")
 
     status = str(data.get("status", "")).lower()
+    if status in {"done", "success", "ok", "complete"}:
+        status = "completed"
     if status not in {"completed", "failed"}:
         return ParsedResult(ok=False, result=data, error=f"invalid_status:{status}")
 

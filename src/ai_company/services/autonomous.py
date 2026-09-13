@@ -148,13 +148,13 @@ def _progress_snapshot(session: Session, project_id: str) -> str:
     for status, n in rows:
         counts[str(status)] = int(n)
     return (
-        f"DONE={counts.get(TaskStatus.DONE, 0)} "
-        f"READY={counts.get(TaskStatus.READY, 0)} "
-        f"WAITING={counts.get(TaskStatus.WAITING, 0)} "
-        f"RUNNING={counts.get(TaskStatus.RUNNING, 0)} "
-        f"REVIEW={counts.get(TaskStatus.REVIEW_REQUIRED, 0)} "
-        f"BLOCKED={counts.get(TaskStatus.BLOCKED, 0)} "
-        f"FAILED={counts.get(TaskStatus.FAILED, 0)}"
+        f"完了={counts.get(TaskStatus.DONE, 0)} "
+        f"実行待ち={counts.get(TaskStatus.READY, 0)} "
+        f"依存待ち={counts.get(TaskStatus.WAITING, 0)} "
+        f"実行中={counts.get(TaskStatus.RUNNING, 0)} "
+        f"検証待ち={counts.get(TaskStatus.REVIEW_REQUIRED, 0)} "
+        f"停止={counts.get(TaskStatus.BLOCKED, 0)} "
+        f"失敗={counts.get(TaskStatus.FAILED, 0)}"
     )
 
 
@@ -179,9 +179,11 @@ def run_autonomous(
 
     result = AutonomousResult(project_status=project.status)
     auto_approve_open_requests(session, project_id=project_id, config=cfg)
+    from ai_company.ui_ja import runner_ja
+
     progress(
-        f"AUTONOMOUS begin  project={project_id}  runner={runner}  "
-        f"max_cycles={max_cycles}  {_progress_snapshot(session, project_id)}"
+        f"自動実行を開始  案件={project_id}  実行方式={runner_ja(runner)}  "
+        f"最大サイクル={max_cycles}  {_progress_snapshot(session, project_id)}"
     )
 
     for cycle in range(1, max_cycles + 1):
@@ -194,18 +196,18 @@ def run_autonomous(
             result.project_status = project.status
             result.stopped_reason = "all_implementation_done"
             result.summaries.append(human_summary(session, project_id=project_id))
-            progress(f"AUTONOMOUS complete  reason=all_implementation_done  rc={art.id}")
+            progress(f"自動実行完了  理由=実装タスクすべて完了  候補={art.id}")
             break
 
         if _has_blocking_exception(session, project_id):
             result.project_status = project.status
             result.stopped_reason = "blocked_exception"
             result.summaries.append(exception_digest(session, project_id=project_id))
-            progress("AUTONOMOUS stop  reason=blocked_exception")
+            progress("自動実行停止  理由=停止タスクあり（要判断）")
             break
 
         progress(
-            f"CYCLE {cycle}/{max_cycles}  {_progress_snapshot(session, project_id)}"
+            f"サイクル {cycle}/{max_cycles}  {_progress_snapshot(session, project_id)}"
         )
         sched = run_once(
             session,
@@ -217,8 +219,8 @@ def run_autonomous(
         result.last_scheduler = sched
         result.started_total += sched.started
         progress(
-            f"CYCLE {cycle} summary  started={sched.started} denied={sched.denied} "
-            f"deferred={sched.deferred} throttled={sched.throttled}  "
+            f"サイクル {cycle} 結果  開始={sched.started} 拒否={sched.denied} "
+            f"延期={sched.deferred} 抑制={sched.throttled}  "
             f"{_progress_snapshot(session, project_id)}"
         )
 
@@ -229,12 +231,10 @@ def run_autonomous(
                 art = create_release_candidate(session, project=project)
                 result.release_candidate_id = art.id
                 result.stopped_reason = "all_implementation_done"
-                progress(
-                    f"AUTONOMOUS complete  reason=all_implementation_done  rc={art.id}"
-                )
+                progress(f"自動実行完了  理由=実装タスクすべて完了  候補={art.id}")
             else:
                 result.stopped_reason = "idle_incomplete"
-                progress("AUTONOMOUS stop  reason=idle_incomplete")
+                progress("自動実行停止  理由=実行できるタスクがない（未完了）")
             result.project_status = project.status
             result.summaries.append(human_summary(session, project_id=project_id))
             break
@@ -243,7 +243,7 @@ def run_autonomous(
             result.stopped_reason = "max_cycles"
             result.project_status = project.status
             result.summaries.append(exception_digest(session, project_id=project_id))
-            progress("AUTONOMOUS stop  reason=max_cycles")
+            progress("自動実行停止  理由=最大サイクル到達")
     else:
         result.stopped_reason = result.stopped_reason or "max_cycles"
 
