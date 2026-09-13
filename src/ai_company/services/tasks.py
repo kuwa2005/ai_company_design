@@ -73,6 +73,7 @@ def create_task(
     max_retries: int | None = None,
     estimated_cost: float | None = None,
     depends_on: list[str] | None = None,
+    parent_task_id: str | None = None,
     config: AppConfig | None = None,
 ) -> Task:
     cfg = config or load_config()
@@ -87,6 +88,7 @@ def create_task(
     task = Task(
         id=new_id("TASK"),
         project_id=project.id,
+        parent_task_id=parent_task_id,
         title=title,
         objective=objective or title,
         role_required=role_required,

@@ -1,4 +1,4 @@
-"""Scheduler: lease READY tasks, consult Cost Governor, hire mock workers."""
+"""Scheduler: lease READY tasks, consult Cost Governor, hire workers."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from ai_company.db.models import Task
 from ai_company.enums import CostDecision
 from ai_company.services import cost_governor as cg
 from ai_company.services.audit import record_audit
+from ai_company.services.cleanup import run_cleanup
 from ai_company.services.tasks import list_ready_tasks
 from ai_company.services.workers import RunnerKind, dispatch_worker, hire_worker
 
@@ -23,6 +24,8 @@ class SchedulerResult:
     denied: int = 0
     deferred: int = 0
     throttled: int = 0
+    leases_reclaimed: int = 0
+    zombies_killed: int = 0
     details: list[dict[str, str]] | None = None
 
     def __post_init__(self) -> None:
@@ -62,25 +65,42 @@ def run_once(
 ) -> SchedulerResult:
     """
     One scheduling cycle:
-    READY -> Cost check -> reserve -> hire -> runner -> DONE/TERMINATED
+    cleanup -> READY -> Cost check -> reserve -> hire -> runner
+    Re-fetches READY after each start so review tasks enqueued mid-cycle can run.
     """
     cfg = config or load_config()
     result = SchedulerResult()
     holder = "scheduler"
 
-    ready = list_ready_tasks(session)
+    cleanup = run_cleanup(session, config=cfg)
+    result.leases_reclaimed = cleanup.leases_reclaimed
+    result.zombies_killed = cleanup.zombies_killed
+
     slots_budget = max_to_start
     if slots_budget is None:
-        # respect current effective capacity loosely; per-task evaluate decides
         slots_budget = cfg.settings.scheduler.max_concurrent_workers
 
     started = 0
-    for task in ready:
-        if started >= slots_budget:
+    seen_blocked_lease: set[str] = set()
+    started_ids: set[str] = set()
+
+    while started < slots_budget:
+        ready = list_ready_tasks(session)
+        # Skip tasks already started or un-leaseable this cycle (avoid fail→READY→restart loops).
+        task = next(
+            (
+                t
+                for t in ready
+                if t.id not in seen_blocked_lease and t.id not in started_ids
+            ),
+            None,
+        )
+        if task is None:
             break
 
         result.attempted += 1
         if not acquire_lease(session, task, holder=holder):
+            seen_blocked_lease.add(task.id)
             result.details.append({"task_id": task.id, "result": "lease_held"})
             continue
 
@@ -89,6 +109,7 @@ def run_once(
             result.denied += 1
             cg.deny_and_defer(session, task=task, verdict=verdict)
             release_lease(session, task)
+            seen_blocked_lease.add(task.id)
             result.details.append(
                 {"task_id": task.id, "result": "DENY", "reason": verdict.reason}
             )
@@ -97,11 +118,12 @@ def run_once(
             result.deferred += 1
             cg.deny_and_defer(session, task=task, verdict=verdict)
             release_lease(session, task)
+            seen_blocked_lease.add(task.id)
             result.details.append(
                 {"task_id": task.id, "result": verdict.decision, "reason": verdict.reason}
             )
             continue
-        # Include workers already started this cycle (mock finishes synchronously).
+
         active = cg.count_active_workers(session) + started
         if active >= verdict.effective_max_workers:
             result.throttled += 1
@@ -115,7 +137,6 @@ def run_once(
             )
             break
 
-        # ALLOW (or THROTTLE with remaining slots)
         cg.reserve_budget(session, task=task)
         worker = hire_worker(session, task=task)
         record_audit(
@@ -143,6 +164,7 @@ def run_once(
         release_lease(session, task)
         result.started += 1
         started += 1
+        started_ids.add(task.id)
         result.details.append(
             {
                 "task_id": task.id,

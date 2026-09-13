@@ -12,7 +12,9 @@ from ai_company.config import clear_config_cache, load_config
 from ai_company.db import init_db, reset_engine, session_scope
 from ai_company.paths import audit_log_path, data_dir, db_path, executions_dir
 from ai_company.services.audit import list_audit_events
+from ai_company.services.cleanup import run_cleanup
 from ai_company.services.cost_governor import get_budget_snapshot
+from ai_company.services.escalation import list_approvals, resolve_approval
 from ai_company.services.scheduler import run_once
 from ai_company.services.secretary import (
     answer_question,
@@ -35,6 +37,7 @@ worker_app = typer.Typer(help="Worker commands")
 budget_app = typer.Typer(help="Budget commands")
 audit_app = typer.Typer(help="Audit commands")
 staffing_app = typer.Typer(help="Staffing request commands")
+approval_app = typer.Typer(help="Human approval / escalation commands")
 
 app.add_typer(project_app, name="project")
 app.add_typer(task_app, name="task")
@@ -43,6 +46,7 @@ app.add_typer(worker_app, name="worker")
 app.add_typer(budget_app, name="budget")
 app.add_typer(audit_app, name="audit")
 app.add_typer(staffing_app, name="staffing")
+app.add_typer(approval_app, name="approval")
 
 console = Console()
 
@@ -192,10 +196,21 @@ def scheduler_run_once(
         result = run_once(session, mock_succeed=not fail, runner=runner)  # type: ignore[arg-type]
         console.print(
             f"runner={runner} attempted={result.attempted} started={result.started} "
-            f"denied={result.denied} deferred={result.deferred} throttled={result.throttled}"
+            f"denied={result.denied} deferred={result.deferred} throttled={result.throttled} "
+            f"leases_reclaimed={result.leases_reclaimed} zombies_killed={result.zombies_killed}"
         )
         for d in result.details or []:
             console.print(d)
+
+
+@scheduler_app.command("cleanup")
+def scheduler_cleanup() -> None:
+    """Reclaim expired leases and kill zombie workers."""
+    with session_scope() as session:
+        result = run_cleanup(session)
+        console.print(
+            f"leases_reclaimed={result.leases_reclaimed} zombies_killed={result.zombies_killed}"
+        )
 
 
 @worker_app.command("list")
@@ -270,6 +285,41 @@ def staffing_list(
                 r.id, r.role, str(r.requested_count), r.status, r.reason[:60]
             )
         console.print(table)
+
+
+@approval_app.command("list")
+def approval_list(
+    status: Optional[str] = typer.Option(None, "--status"),
+) -> None:
+    with session_scope() as session:
+        rows = list_approvals(session, status=status)
+        table = Table(title="Approvals")
+        table.add_column("ID")
+        table.add_column("Action")
+        table.add_column("Status")
+        table.add_column("Reason")
+        for r in rows:
+            table.add_row(r.id, r.action, r.status, r.reason[:80])
+        console.print(table)
+
+
+@approval_app.command("resolve")
+def approval_resolve(
+    approval_id: str = typer.Argument(..., help="Approval id"),
+    approve: bool = typer.Option(False, "--approve", help="Approve and requeue task"),
+    reject: bool = typer.Option(False, "--reject", help="Reject approval"),
+    note: str = typer.Option("", "--note"),
+) -> None:
+    if approve == reject:
+        raise typer.BadParameter("Specify exactly one of --approve or --reject")
+    with session_scope() as session:
+        row = resolve_approval(
+            session,
+            approval_id=approval_id,
+            approve=approve,
+            note=note,
+        )
+        console.print(f"[green]Resolved[/green] {row.id} -> {row.status}")
 
 
 if __name__ == "__main__":

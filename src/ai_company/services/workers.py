@@ -16,7 +16,14 @@ from ai_company.paths import executions_dir
 from ai_company.services import cost_governor as cg
 from ai_company.services.audit import record_audit
 from ai_company.services.cursor_runner import run_cursor_cli
+from ai_company.services.escalation import escalate_blocked_task
 from ai_company.services.result_parser import parse_structured_result
+from ai_company.services.review import (
+    complete_parent_after_review_pass,
+    enqueue_review_task,
+    handle_review_reject,
+    role_requires_review,
+)
 from ai_company.services.tasks import refresh_dependents
 
 RunnerKind = Literal["mock", "cursor"]
@@ -83,7 +90,9 @@ def _finalize_execution(
     execution: Execution,
     success: bool,
     timed_out: bool = False,
+    config: AppConfig | None = None,
 ) -> Execution:
+    cfg = config or load_config()
     worker.status = WorkerStatus.REPORTING
     session.flush()
 
@@ -98,6 +107,36 @@ def _finalize_execution(
 
     if success:
         cg.spend_budget(session, task=task, amount=float(actual_cost))
+        is_reviewer = not role_requires_review(task.role_required)
+
+        if is_reviewer:
+            task.status = TaskStatus.DONE
+            session.flush()
+            record_audit(
+                session,
+                event_type="task_completed",
+                actor_type="worker",
+                actor_id=worker.id,
+                target_type="task",
+                target_id=task.id,
+                metadata={"execution_id": execution.id, "kind": "review"},
+            )
+            complete_parent_after_review_pass(session, review_task=task)
+            return execution
+
+        if cfg.settings.review.enabled:
+            enqueue_review_task(session, parent=task, config=cfg)
+            record_audit(
+                session,
+                event_type="task_awaiting_review",
+                actor_type="worker",
+                actor_id=worker.id,
+                target_type="task",
+                target_id=task.id,
+                metadata={"execution_id": execution.id},
+            )
+            return execution
+
         task.status = TaskStatus.DONE
         session.flush()
         record_audit(
@@ -112,7 +151,26 @@ def _finalize_execution(
         refresh_dependents(session, task.id)
         return execution
 
+    # Failure path
     cg.release_reservation(session, task=task, amount=task.estimated_cost)
+
+    # Reviewer reject → rework parent instead of retrying the review forever
+    if not role_requires_review(task.role_required) and task.parent_task_id:
+        task.status = TaskStatus.DONE
+        session.flush()
+        record_audit(
+            session,
+            event_type="task_completed",
+            actor_type="worker",
+            actor_id=worker.id,
+            target_type="task",
+            target_id=task.id,
+            metadata={"execution_id": execution.id, "review_verdict": "REJECT"},
+        )
+        handle_review_reject(session, review_task=task)
+        cg.record_failure_and_maybe_trip(session)
+        return execution
+
     task.retry_count += 1
     if timed_out:
         record_audit(
@@ -126,14 +184,11 @@ def _finalize_execution(
         )
     if task.retry_count > task.max_retries:
         task.status = TaskStatus.BLOCKED
-        record_audit(
+        session.flush()
+        escalate_blocked_task(
             session,
-            event_type="task_blocked",
-            actor_type="system",
-            actor_id="worker_manager",
-            target_type="task",
-            target_id=task.id,
-            metadata={"retry_count": task.retry_count, "max_retries": task.max_retries},
+            task=task,
+            reason=f"retries_exhausted:{task.retry_count}/{task.max_retries}",
         )
     else:
         if not timed_out:
@@ -314,6 +369,7 @@ def run_cursor_worker(
         execution=execution,
         success=success,
         timed_out=capture.timed_out,
+        config=cfg,
     )
 
 
