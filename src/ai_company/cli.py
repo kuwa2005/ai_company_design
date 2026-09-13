@@ -118,11 +118,18 @@ def task_list(
 @scheduler_app.command("run-once")
 def scheduler_run_once(
     fail: bool = typer.Option(False, "--fail", help="Force mock worker failure"),
+    runner: str = typer.Option(
+        "mock",
+        "--runner",
+        help="Worker runner: mock | cursor (always via Scheduler/Cost Guard)",
+    ),
 ) -> None:
+    if runner not in {"mock", "cursor"}:
+        raise typer.BadParameter("runner must be 'mock' or 'cursor'")
     with session_scope() as session:
-        result = run_once(session, mock_succeed=not fail)
+        result = run_once(session, mock_succeed=not fail, runner=runner)  # type: ignore[arg-type]
         console.print(
-            f"attempted={result.attempted} started={result.started} "
+            f"runner={runner} attempted={result.attempted} started={result.started} "
             f"denied={result.denied} deferred={result.deferred} throttled={result.throttled}"
         )
         for d in result.details or []:

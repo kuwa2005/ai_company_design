@@ -9,11 +9,11 @@ from sqlalchemy.orm import Session
 
 from ai_company.config import AppConfig, load_config
 from ai_company.db.models import Task
-from ai_company.enums import CostDecision, TaskStatus
+from ai_company.enums import CostDecision
 from ai_company.services import cost_governor as cg
 from ai_company.services.audit import record_audit
 from ai_company.services.tasks import list_ready_tasks
-from ai_company.services.workers import hire_worker, run_mock_worker
+from ai_company.services.workers import RunnerKind, dispatch_worker, hire_worker
 
 
 @dataclass
@@ -57,10 +57,12 @@ def run_once(
     config: AppConfig | None = None,
     mock_succeed: bool = True,
     max_to_start: int | None = None,
+    runner: RunnerKind = "mock",
+    timeout_seconds: float | None = None,
 ) -> SchedulerResult:
     """
     One scheduling cycle:
-    READY -> Cost check -> reserve -> hire -> mock run -> DONE/TERMINATED
+    READY -> Cost check -> reserve -> hire -> runner -> DONE/TERMINATED
     """
     cfg = config or load_config()
     result = SchedulerResult()
@@ -123,14 +125,31 @@ def run_once(
             actor_id="scheduler",
             target_type="task",
             target_id=task.id,
-            metadata={"worker_id": worker.id, "decision": verdict.decision},
+            metadata={
+                "worker_id": worker.id,
+                "decision": verdict.decision,
+                "runner": runner,
+            },
         )
-        run_mock_worker(session, task=task, worker=worker, succeed=mock_succeed)
+        dispatch_worker(
+            session,
+            task=task,
+            worker=worker,
+            runner=runner,
+            mock_succeed=mock_succeed,
+            config=cfg,
+            timeout_seconds=timeout_seconds,
+        )
         release_lease(session, task)
         result.started += 1
         started += 1
         result.details.append(
-            {"task_id": task.id, "result": "STARTED", "worker_id": worker.id}
+            {
+                "task_id": task.id,
+                "result": "STARTED",
+                "worker_id": worker.id,
+                "runner": runner,
+            }
         )
 
     return result
