@@ -154,6 +154,7 @@ def refresh_task_readiness(session: Session, task_id: str) -> Task:
     if task.status in {
         TaskStatus.RUNNING,
         TaskStatus.REVIEW,
+        TaskStatus.REVIEW_REQUIRED,
         TaskStatus.DONE,
         TaskStatus.CANCELLED,
         TaskStatus.BLOCKED,
@@ -165,10 +166,14 @@ def refresh_task_readiness(session: Session, task_id: str) -> Task:
         return task
 
     if task.status == TaskStatus.DEFERRED_BUDGET:
-        # keep deferred until scheduler reconsiders
         return task
 
-    if dependencies_satisfied(session, task.id):
+    deps_ok = dependencies_satisfied(session, task.id)
+    results_ok = True
+    if task.kind == "judge":
+        results_ok = _judge_required_results_ready(session, task)
+
+    if deps_ok and results_ok:
         if task.status != TaskStatus.READY:
             task.status = TaskStatus.READY
             session.flush()
@@ -179,7 +184,7 @@ def refresh_task_readiness(session: Session, task_id: str) -> Task:
                 actor_id="queue",
                 target_type="task",
                 target_id=task.id,
-                metadata={"priority": task.priority},
+                metadata={"priority": task.priority, "kind": task.kind},
             )
     else:
         if task.status != TaskStatus.WAITING:
@@ -192,9 +197,34 @@ def refresh_task_readiness(session: Session, task_id: str) -> Task:
                 actor_id="queue",
                 target_type="task",
                 target_id=task.id,
-                metadata={},
+                metadata={
+                    "deps_ok": deps_ok,
+                    "results_ok": results_ok,
+                    "kind": task.kind,
+                },
             )
     return task
+
+
+def _judge_required_results_ready(session: Session, judge_task: Task) -> bool:
+    """Judge stays WAITING until required ValidationResults exist (not only task deps)."""
+    from ai_company.db.models import ValidationPlan, ValidationResult
+
+    if not judge_task.validation_plan_id:
+        return False
+    plan = session.get(ValidationPlan, judge_task.validation_plan_id)
+    if plan is None:
+        return False
+    required = set(plan.required_review_types or [])
+    if not required:
+        return True
+    got = {
+        r.review_type
+        for r in session.scalars(
+            select(ValidationResult).where(ValidationResult.plan_id == plan.id)
+        ).all()
+    }
+    return required.issubset(got)
 
 
 def refresh_dependents(session: Session, completed_task_id: str) -> None:

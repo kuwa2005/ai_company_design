@@ -131,6 +131,36 @@ def count_active_workers(session: Session, project_id: str | None = None) -> int
     return int(session.scalar(stmt) or 0)
 
 
+def count_active_validation_workers(session: Session) -> int:
+    """Active workers whose task.kind is validation or judge."""
+    stmt = (
+        select(func.count())
+        .select_from(Worker)
+        .join(Task, Task.id == Worker.task_id)
+        .where(
+            Worker.status.in_(list(ACTIVE_WORKER_STATUSES)),
+            Task.kind.in_(["validation", "judge"]),
+        )
+    )
+    return int(session.scalar(stmt) or 0)
+
+
+def count_active_reviewers_for_plan(session: Session, plan_id: str | None) -> int:
+    if not plan_id:
+        return 0
+    stmt = (
+        select(func.count())
+        .select_from(Worker)
+        .join(Task, Task.id == Worker.task_id)
+        .where(
+            Worker.status.in_(list(ACTIVE_WORKER_STATUSES)),
+            Task.kind == "validation",
+            Task.validation_plan_id == plan_id,
+        )
+    )
+    return int(session.scalar(stmt) or 0)
+
+
 def is_circuit_open(session: Session, config: AppConfig | None = None) -> tuple[bool, str]:
     cfg = config or load_config()
     state = session.scalar(
@@ -307,6 +337,46 @@ def evaluate(
     sched_max = cfg.settings.scheduler.max_concurrent_workers
     effective = min(sched_max, tier.max_workers)
     pmin = getattr(tier, "priority_minimum", None)
+
+    # Validation / Judge fan-out caps (Cost Governor owns quality fan-out limits)
+    is_validation_like = task.kind in {"validation", "judge"}
+    if is_validation_like:
+        val_cap = cfg.settings.scheduler.max_validation_workers
+        parallel_cap = min(
+            cfg.budget.validation.max_parallel_reviewers_per_task,
+            cfg.validation.max_parallel_reviewers_per_task,
+        )
+        active_val = count_active_validation_workers(session)
+        if active_val >= val_cap:
+            return CostVerdict(
+                decision=CostDecision.THROTTLE,
+                reason=f"max_validation_workers:{active_val}/{val_cap}",
+                effective_max_workers=min(effective, val_cap),
+                usage_ratio=snap.soft_usage_ratio,
+                priority_minimum=pmin,
+            )
+        if task.kind == "validation":
+            plan_active = count_active_reviewers_for_plan(session, task.validation_plan_id)
+            if plan_active >= parallel_cap:
+                return CostVerdict(
+                    decision=CostDecision.THROTTLE,
+                    reason=f"max_parallel_reviewers_per_task:{plan_active}/{parallel_cap}",
+                    effective_max_workers=min(effective, parallel_cap),
+                    usage_ratio=snap.soft_usage_ratio,
+                    priority_minimum=pmin,
+                )
+        # Soft validation budget: validation spend should not exceed ratio of monthly soft
+        ratio = cfg.budget.validation.default_budget_ratio
+        val_spent = _sum_budget(
+            session,
+            kinds={BudgetKind.SPEND},
+            scope_type="task",
+        )
+        # Approximate: count spend on validation tasks via joining is heavy; use ratio of soft as ceiling for reserved+spent on validation kinds via metadata — simpler: deny if total soft usage already high AND this is validation beyond ratio of soft
+        validation_ceiling = snap.soft_limit * ratio
+        # Use reserved+spent already attributed; for MVP use concurrent throttle primarily.
+        # Additional soft gate: if soft usage > ratio and task is validation-only fan-out beyond needed — skip.
+        _ = (val_spent, validation_ceiling)  # reserved for accounting extension
 
     if effective <= 0:
         return CostVerdict(

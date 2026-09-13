@@ -69,9 +69,16 @@ class SettingsConfig(BaseModel):
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
 
 
+class BudgetValidationLimits(BaseModel):
+    default_budget_ratio: float = 0.30
+    max_reviewers_per_task: int = 5
+    max_parallel_reviewers_per_task: int = 2
+
+
 class BudgetConfig(BaseModel):
     budget: BudgetLimits = Field(default_factory=BudgetLimits)
     usage_policy: dict[str, UsageTier] = Field(default_factory=dict)
+    validation: BudgetValidationLimits = Field(default_factory=BudgetValidationLimits)
 
 
 class CursorRunnerConfig(BaseModel):

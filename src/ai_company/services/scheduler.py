@@ -14,6 +14,7 @@ from ai_company.services import cost_governor as cg
 from ai_company.services.audit import record_audit
 from ai_company.services.cleanup import run_cleanup
 from ai_company.services.tasks import list_ready_tasks
+from ai_company.services.validation import is_judge_task, is_validation_task
 from ai_company.services.workers import RunnerKind, dispatch_worker, hire_worker
 
 
@@ -81,8 +82,10 @@ def run_once(
         slots_budget = cfg.settings.scheduler.max_concurrent_workers
 
     started = 0
+    started_validation = 0
     seen_blocked_lease: set[str] = set()
     started_ids: set[str] = set()
+    started_validation_by_plan: dict[str, int] = {}
 
     while started < slots_budget:
         ready = list_ready_tasks(session)
@@ -103,6 +106,46 @@ def run_once(
             seen_blocked_lease.add(task.id)
             result.details.append({"task_id": task.id, "result": "lease_held"})
             continue
+
+        # Cycle-local validation fan-out (Cost Governor also enforces DB-active counts)
+        if is_validation_task(task) or is_judge_task(task):
+            val_cap = cfg.settings.scheduler.max_validation_workers
+            if (
+                cg.count_active_validation_workers(session) + started_validation
+                >= val_cap
+            ):
+                result.throttled += 1
+                release_lease(session, task)
+                seen_blocked_lease.add(task.id)
+                result.details.append(
+                    {
+                        "task_id": task.id,
+                        "result": "THROTTLE",
+                        "reason": f"max_validation_workers_cycle:{val_cap}",
+                    }
+                )
+                continue
+            if is_validation_task(task) and task.validation_plan_id:
+                parallel_cap = min(
+                    cfg.budget.validation.max_parallel_reviewers_per_task,
+                    cfg.validation.max_parallel_reviewers_per_task,
+                )
+                plan_n = started_validation_by_plan.get(task.validation_plan_id, 0)
+                plan_n += cg.count_active_reviewers_for_plan(
+                    session, task.validation_plan_id
+                )
+                if plan_n >= parallel_cap:
+                    result.throttled += 1
+                    release_lease(session, task)
+                    seen_blocked_lease.add(task.id)
+                    result.details.append(
+                        {
+                            "task_id": task.id,
+                            "result": "THROTTLE",
+                            "reason": f"max_parallel_reviewers:{parallel_cap}",
+                        }
+                    )
+                    continue
 
         verdict = cg.evaluate(session, task=task, config=cfg)
         if verdict.decision == CostDecision.DENY:
@@ -165,6 +208,12 @@ def run_once(
         result.started += 1
         started += 1
         started_ids.add(task.id)
+        if is_validation_task(task) or is_judge_task(task):
+            started_validation += 1
+            if is_validation_task(task) and task.validation_plan_id:
+                started_validation_by_plan[task.validation_plan_id] = (
+                    started_validation_by_plan.get(task.validation_plan_id, 0) + 1
+                )
         result.details.append(
             {
                 "task_id": task.id,

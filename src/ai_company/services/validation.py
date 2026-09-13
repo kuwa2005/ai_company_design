@@ -168,6 +168,11 @@ def record_validation_result(
     evidence: list[dict] | None = None,
     confidence: float | None = 0.9,
 ) -> ValidationResult:
+    from pathlib import Path
+
+    from ai_company.db.models import Artifact
+    from ai_company.paths import executions_dir
+
     plan_id = validation_task.validation_plan_id
     if not plan_id:
         raise ValueError("validation task missing plan_id")
@@ -185,6 +190,41 @@ def record_validation_result(
     )
     session.add(result)
     session.flush()
+
+    # Persist evidence artifact for No-look provenance (M4)
+    out_dir = executions_dir() / (execution_id or result.id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    evidence_path = out_dir / f"evidence_{result.review_type}.json"
+    import json
+
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "validation_result_id": result.id,
+                "verdict": verdict,
+                "findings": findings or [],
+                "evidence": evidence or [],
+                "worker_id": worker_id,
+                "execution_id": execution_id,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    session.add(
+        Artifact(
+            id=new_id("ART"),
+            project_id=validation_task.project_id,
+            task_id=validation_task.id,
+            kind="validation_evidence",
+            path=str(evidence_path),
+            metadata_json={"validation_result_id": result.id, "review_type": result.review_type},
+        )
+    )
+    session.flush()
+
     record_audit(
         session,
         event_type="validation_result_recorded",
@@ -196,6 +236,7 @@ def record_validation_result(
             "verdict": verdict,
             "review_type": result.review_type,
             "plan_id": plan_id,
+            "evidence_path": str(evidence_path),
         },
     )
     return result

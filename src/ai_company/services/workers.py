@@ -34,7 +34,39 @@ def _utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-def hire_worker(session: Session, *, task: Task) -> Worker:
+def hire_worker(
+    session: Session,
+    *,
+    task: Task,
+    reuse_worker_id: str | None = None,
+    config: AppConfig | None = None,
+) -> Worker:
+    """Hire a new ephemeral worker. Reusing a coding worker for validation is forbidden."""
+    cfg = config or load_config()
+    if reuse_worker_id and (
+        is_validation_task(task) or is_judge_task(task)
+    ):
+        if cfg.validation.require_independent_execution:
+            coding_worker_id = _coding_worker_id_for_task(session, task)
+            if coding_worker_id and reuse_worker_id == coding_worker_id:
+                record_audit(
+                    session,
+                    event_type="permission_denied",
+                    actor_type="system",
+                    actor_id="worker_manager",
+                    target_type="task",
+                    target_id=task.id,
+                    metadata={
+                        "reason": "reviewer_independence_violation",
+                        "reuse_worker_id": reuse_worker_id,
+                        "coding_worker_id": coding_worker_id,
+                    },
+                )
+                raise PermissionError(
+                    "Reviewer cannot reuse Coding Worker identity "
+                    f"({reuse_worker_id})"
+                )
+
     worker = Worker(
         id=new_id("WORKER"),
         role=task.role_required,
@@ -52,9 +84,20 @@ def hire_worker(session: Session, *, task: Task) -> Worker:
         actor_id="worker_manager",
         target_type="worker",
         target_id=worker.id,
-        metadata={"task_id": task.id, "role": worker.role},
+        metadata={"task_id": task.id, "role": worker.role, "kind": task.kind},
     )
     return worker
+
+
+def _coding_worker_id_for_task(session: Session, task: Task) -> str | None:
+    if not task.source_execution_id:
+        return None
+    from ai_company.db.models import Execution
+
+    execution = session.get(Execution, task.source_execution_id)
+    if execution is None:
+        return None
+    return execution.worker_id
 
 
 def _mark_starting(session: Session, *, task: Task, worker: Worker) -> None:
@@ -149,6 +192,32 @@ def _finalize_execution(
 
         # Implementation / repair: NEVER self-DONE when validation enabled
         if is_implementation_task(task):
+            if task.kind == "repair":
+                # Repair completion closes the repair task and opens a NEW validation plan
+                # on the original parent — never reuse old ValidationResults for PASS.
+                task.status = TaskStatus.DONE
+                session.flush()
+                record_audit(
+                    session,
+                    event_type="task_completed",
+                    actor_type="worker",
+                    actor_id=worker.id,
+                    target_type="task",
+                    target_id=task.id,
+                    metadata={"execution_id": execution.id, "kind": "repair"},
+                )
+                parent = (
+                    session.get(Task, task.parent_task_id) if task.parent_task_id else None
+                )
+                if parent is not None and cfg.validation.enabled:
+                    start_validation_gate(
+                        session,
+                        parent=parent,
+                        source_execution_id=execution.id,
+                        config=cfg,
+                    )
+                return execution
+
             if cfg.validation.enabled and not cfg.validation.coding_worker_can_self_approve:
                 start_validation_gate(
                     session,
