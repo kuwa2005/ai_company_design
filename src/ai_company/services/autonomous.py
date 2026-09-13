@@ -204,6 +204,9 @@ def run_autonomous(
             result.stopped_reason = "blocked_exception"
             result.summaries.append(exception_digest(session, project_id=project_id))
             progress("自動実行停止  理由=停止タスクあり（要判断）")
+            progress(
+                "次は `ai-company status` か、表示された承認 resolve 手順を確認してください"
+            )
             break
 
         progress(

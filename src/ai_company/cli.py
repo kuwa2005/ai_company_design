@@ -19,6 +19,7 @@ from ai_company.services.escalation import list_approvals, resolve_approval
 from ai_company.services.scheduler import run_once
 from ai_company.services.secretary import (
     answer_question,
+    human_next_actions,
     human_summary,
     list_staffing,
     start_goal,
@@ -141,12 +142,26 @@ def start_cmd(
                 runner=runner,  # type: ignore[arg-type]
             )
             console.print("")
+            stop_ja = {
+                "blocked_exception": "停止タスクあり（要判断）",
+                "idle_incomplete": "実行可能タスクなし（未完了）",
+                "max_cycles": "最大サイクル到達",
+                "all_implementation_done": "実装完了",
+            }.get(auto.stopped_reason, auto.stopped_reason)
             console.print(
                 f"[cyan]自動実行[/cyan] サイクル={auto.cycles} "
-                f"開始数={auto.started_total} 停止理由={auto.stopped_reason} "
-                f"リリース候補={auto.release_candidate_id}"
+                f"開始数={auto.started_total} 停止理由={stop_ja} "
+                f"リリース候補={auto.release_candidate_id or 'なし'}"
             )
             console.print(human_summary(session, project_id=result.project.id))
+            console.print("")
+            console.print(
+                human_next_actions(
+                    session,
+                    project_id=result.project.id,
+                    stopped_reason=auto.stopped_reason,
+                )
+            )
         elif dispatch:
             # Dispatch is owned by CLI → Scheduler, not Secretary.
             sched = run_once(session, runner=runner)  # type: ignore[arg-type]
@@ -161,9 +176,15 @@ def start_cmd(
 @app.command("status")
 def status_cmd(
     project: Optional[str] = typer.Option(None, "--project", help="Project id"),
+    guide: bool = typer.Option(
+        True, "--guide/--no-guide", help="停止時の次アクション案内を出す"
+    ),
 ) -> None:
     with session_scope() as session:
         console.print(human_summary(session, project_id=project))
+        if guide:
+            console.print("")
+            console.print(human_next_actions(session, project_id=project))
 
 
 @app.command("ask")

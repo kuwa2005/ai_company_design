@@ -516,6 +516,113 @@ def exception_digest(session: Session, *, project_id: str | None = None) -> str:
     return "\n".join(lines)
 
 
+def _explain_block_reason(reason: str) -> str:
+    r = reason or ""
+    if "judge_reject" in r and "review_fail:test" in r:
+        return (
+            "独立テスト検証が FAIL し、判定（Judge）が REJECT しました。"
+            "自動の修正回数の上限に達したため、タスクを停止しています。"
+        )
+    if "judge_reject" in r and "security_fail" in r:
+        return "セキュリティ検証が FAIL したため、判定が REJECT → 停止しました。"
+    if "judge_reject" in r and "critical_finding" in r:
+        return "重大（critical）指摘があったため、判定が REJECT → 停止しました。"
+    if "judge_reject" in r:
+        return f"判定が REJECT したため停止しました（詳細: {r[:120]}）。"
+    if "judge_human_escalation" in r or "HUMAN_ESCALATION" in r:
+        return "判定が人間エスカレーションになったため停止しています。"
+    if "retries_exhausted" in r:
+        return "ワーカー実行の失敗が続き、再試行上限に達したため停止しました。"
+    if "repair_loop_max_cycles" in r:
+        return "修正ループの回数上限に達したため、自動続行を止めました。"
+    return f"システムが人間判断を要求しています（詳細: {r[:160]}）。"
+
+
+def human_next_actions(
+    session: Session, *, project_id: str | None = None, stopped_reason: str | None = None
+) -> str:
+    """停止時に『なぜ止まったか』『人は何をすればよいか』を案内する。"""
+    from ai_company.db.models import Approval
+
+    lines: list[str] = ["【いま止まっている理由】"]
+
+    reason_map = {
+        "blocked_exception": "停止タスクがあり、自動実行を安全のため中断しました。",
+        "idle_incomplete": "実行できるタスクがなくなりましたが、まだ未完了の作業が残っています。",
+        "max_cycles": "設定した最大サイクル数に達したため停止しました。",
+        "all_implementation_done": "実装タスクはすべて完了しています。",
+    }
+    if stopped_reason:
+        lines.append(f"- {reason_map.get(stopped_reason, stopped_reason)}")
+
+    blocked_stmt = select(Task).where(Task.status == TaskStatus.BLOCKED)
+    if project_id:
+        blocked_stmt = blocked_stmt.where(Task.project_id == project_id)
+    blocked = list(session.scalars(blocked_stmt.limit(10)).all())
+
+    pending = list(
+        session.scalars(
+            select(Approval)
+            .where(Approval.status == "PENDING")
+            .order_by(Approval.created_at.desc())
+            .limit(10)
+        ).all()
+    )
+
+    if blocked:
+        lines.append("")
+        lines.append("【停止中のタスク】")
+        for t in blocked:
+            lines.append(f"- {t.id}  「{t.title}」")
+            # Find matching pending approval for this task
+            matched = next((a for a in pending if t.id in (a.reason or "")), None)
+            if matched:
+                lines.append(f"  原因: {_explain_block_reason(matched.reason)}")
+            else:
+                lines.append("  原因: 再試行上限または判定により停止（詳細は承認一覧を確認）")
+
+    if pending:
+        lines.append("")
+        lines.append("【人がやること】")
+        lines.append("1. 状況確認:")
+        lines.append("   ai-company approval list --status PENDING")
+        lines.append("   ai-company status")
+        for a in pending:
+            lines.append("")
+            lines.append(f"2. 承認 ID: {a.id}")
+            lines.append(f"   内容: {_explain_block_reason(a.reason)}")
+            lines.append("   ・再実行してよい（修正を続ける）場合:")
+            lines.append(f"     ai-company approval resolve {a.id} --approve")
+            lines.append("   ・打ち切る／方針を変える場合:")
+            lines.append(f"     ai-company approval resolve {a.id} --reject --note \"理由\"")
+        lines.append("")
+        lines.append("3. 承認して再キューした場合、同じディレクトリで自動実行を再開:")
+        lines.append(
+            '   ai-company scheduler run-once --runner cursor'
+        )
+        lines.append(
+            "   # または案件を続けて回すなら、必要に応じて start の --autonomous を再実行"
+        )
+        lines.append(
+            "   # （既存DBを使うので、新しい計画を増やしたくない場合は scheduler 側が安全）"
+        )
+    elif blocked:
+        lines.append("")
+        lines.append("【人がやること】")
+        lines.append("- 停止タスクはあるが承認キューが空です。ログと validation status を確認してください。")
+        for t in blocked:
+            lines.append(f"  ai-company validation status {t.id}")
+    else:
+        lines.append("")
+        lines.append("【人がやること】")
+        lines.append("- いま承認待ちはありません。ai-company status で進捗を確認してください。")
+
+    lines.append("")
+    lines.append("補足: 自動実行は『実装の自己申告』だけでは完了にしません。")
+    lines.append("検証 FAIL → 判定 REJECT → 修正上限超過、のとき人間判断に上がります。")
+    return "\n".join(lines)
+
+
 def answer_question(session: Session, question: str, *, project_id: str | None = None) -> str:
     """Lightweight ask over DB state — no process spawn."""
     q = question.strip().lower()
