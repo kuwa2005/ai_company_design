@@ -8,6 +8,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from sqlalchemy.orm import Session
+
 from ai_company.config import AppConfig, CursorRunnerConfig, load_config
 from ai_company.db.models import Task
 from ai_company.services.prompt_builder import build_task_prompt
@@ -55,13 +57,14 @@ def run_cursor_cli(
     timeout_seconds: float | None = None,
     cwd: str | Path | None = None,
     env: dict[str, str] | None = None,
+    session: Session | None = None,
 ) -> RunnerCapture:
     """
     Invoke Cursor agent CLI. Never uses shell=True.
     Writes full stdout/stderr to paths even on timeout.
     """
     cfg = config or load_config()
-    prompt = build_task_prompt(task)
+    prompt = build_task_prompt(task, session=session)
     cmd = build_cursor_command(prompt, config=cfg.cursor_runner)
     timeout = timeout_seconds
     if timeout is None:

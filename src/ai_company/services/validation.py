@@ -103,6 +103,16 @@ def start_validation_gate(
     validation_task_ids: list[str] = []
     for rtype in review_types:
         role = REVIEW_TYPE_TO_ROLE.get(rtype, "reviewer")
+        from ai_company.services.staffing import ensure_staffing_request
+
+        ensure_staffing_request(
+            session,
+            project_id=parent.project_id,
+            role=role,
+            requested_count=1,
+            reason=f"on-demand {rtype} reviewer for {parent.id}",
+            config=cfg,
+        )
         vt = create_task(
             session,
             title=f"Validate[{rtype}]: {parent.title}",
@@ -125,6 +135,16 @@ def start_validation_gate(
         validation_task_ids.append(vt.id)
 
     if cfg.judge.required:
+        from ai_company.services.staffing import ensure_staffing_request
+
+        ensure_staffing_request(
+            session,
+            project_id=parent.project_id,
+            role="judge",
+            requested_count=1,
+            reason=f"on-demand judge for {parent.id}",
+            config=cfg,
+        )
         create_task(
             session,
             title=f"Judge: {parent.title}",
@@ -242,13 +262,57 @@ def record_validation_result(
     return result
 
 
+def detect_reviewer_conflicts(results: list[ValidationResult]) -> list[dict]:
+    """Surface PASS vs FAIL / contradictory high-severity findings across reviewers."""
+    conflicts: list[dict] = []
+    by_verdict: dict[str, list[str]] = {}
+    for r in results:
+        by_verdict.setdefault(str(r.verdict), []).append(r.review_type)
+    if (
+        ReviewVerdict.PASS in by_verdict
+        and ReviewVerdict.FAIL in by_verdict
+    ):
+        conflicts.append(
+            {
+                "type": "verdict_disagreement",
+                "pass": by_verdict.get(ReviewVerdict.PASS, []),
+                "fail": by_verdict.get(ReviewVerdict.FAIL, []),
+            }
+        )
+    if (
+        ReviewVerdict.PASS in by_verdict
+        and ReviewVerdict.UNCERTAIN in by_verdict
+    ):
+        conflicts.append(
+            {
+                "type": "uncertain_vs_pass",
+                "pass": by_verdict.get(ReviewVerdict.PASS, []),
+                "uncertain": by_verdict.get(ReviewVerdict.UNCERTAIN, []),
+            }
+        )
+    return conflicts
+
+
+def count_repair_cycles(session: Session, parent_task_id: str) -> int:
+    return len(
+        list(
+            session.scalars(
+                select(Task).where(
+                    Task.parent_task_id == parent_task_id,
+                    Task.kind.in_((TaskKind.REPAIR, "repair")),
+                )
+            ).all()
+        )
+    )
+
+
 def apply_judge_hard_rules(
     session: Session,
     *,
     plan: ValidationPlan,
     config: AppConfig | None = None,
-) -> tuple[str, list[str]]:
-    """Code-side hard rules before/with Judge. Returns (verdict, reasons)."""
+) -> tuple[str, list[str], list[dict]]:
+    """Code-side hard rules. Returns (verdict, reasons, conflicts)."""
     cfg = config or load_config()
     reasons: list[str] = []
     results = list(
@@ -256,13 +320,14 @@ def apply_judge_hard_rules(
             select(ValidationResult).where(ValidationResult.plan_id == plan.id)
         ).all()
     )
+    conflicts = detect_reviewer_conflicts(results)
     got = {r.review_type for r in results}
     required = set(plan.required_review_types or [])
 
     if cfg.judge.missing_required_review_blocks_pass and not required.issubset(got):
         missing = sorted(required - got)
         reasons.append(f"missing_required_reviews:{missing}")
-        return JudgeVerdict.REJECT, reasons
+        return JudgeVerdict.REJECT, reasons, conflicts
 
     for r in results:
         findings = r.findings or []
@@ -272,21 +337,25 @@ def apply_judge_hard_rules(
                 for f in findings
             ):
                 reasons.append(f"critical_finding:{r.review_type}")
-                return JudgeVerdict.REJECT, reasons
+                return JudgeVerdict.REJECT, reasons, conflicts
         if cfg.judge.security_fail_blocks_pass:
             if r.review_type == "security" and r.verdict == ReviewVerdict.FAIL:
                 reasons.append("security_fail")
-                return JudgeVerdict.REJECT, reasons
+                return JudgeVerdict.REJECT, reasons, conflicts
         if r.verdict == ReviewVerdict.FAIL:
             reasons.append(f"review_fail:{r.review_type}")
-            return JudgeVerdict.REJECT, reasons
+            return JudgeVerdict.REJECT, reasons, conflicts
         if r.verdict == ReviewVerdict.UNCERTAIN:
             reasons.append(f"review_uncertain:{r.review_type}")
-            return JudgeVerdict.HUMAN_ESCALATION, reasons
+            return JudgeVerdict.HUMAN_ESCALATION, reasons, conflicts
+
+    if conflicts and any(c.get("type") == "uncertain_vs_pass" for c in conflicts):
+        reasons.append("reviewer_disagreement")
+        return JudgeVerdict.HUMAN_ESCALATION, reasons, conflicts
 
     if not reasons:
         reasons.append("all_required_reviews_pass")
-    return JudgeVerdict.PASS, reasons
+    return JudgeVerdict.PASS, reasons, conflicts
 
 
 def finalize_judge(
@@ -302,14 +371,38 @@ def finalize_judge(
     if plan is None:
         raise ValueError("judge task missing validation plan")
 
-    verdict, reasons = apply_judge_hard_rules(session, plan=plan, config=cfg)
+    verdict, reasons, conflicts = apply_judge_hard_rules(
+        session, plan=plan, config=cfg
+    )
+
+    # Infinite-loop guard: too many repair cycles → escalate
+    parent_preview = session.get(Task, plan.task_id)
+    if (
+        verdict == JudgeVerdict.REJECT
+        and parent_preview is not None
+        and count_repair_cycles(session, parent_preview.id) >= cfg.repair_loop.max_cycles
+    ):
+        verdict = JudgeVerdict.HUMAN_ESCALATION
+        reasons = reasons + [
+            f"repair_loop_max_cycles:{cfg.repair_loop.max_cycles}"
+        ]
+
+    # Optional AI judge proposal from execution (advisory only)
+    ai_proposal = None
+    if judge_task.source_execution_id:
+        from ai_company.db.models import Execution
+
+        ex = session.get(Execution, judge_task.source_execution_id)
+        if ex and isinstance(ex.result_json, dict):
+            ai_proposal = ex.result_json.get("verdict")
+
     decision = JudgeDecision(
         id=new_id("JUDGE"),
         plan_id=plan.id,
         task_id=plan.task_id,
         verdict=verdict,
         reasons=reasons,
-        conflicting_reviews=[],
+        conflicting_reviews=conflicts,
         repair_tasks=[],
     )
     session.add(decision)
@@ -324,7 +417,13 @@ def finalize_judge(
         actor_id="judge",
         target_type="judge_decision",
         target_id=decision.id,
-        metadata={"verdict": verdict, "reasons": reasons, "plan_id": plan.id},
+        metadata={
+            "verdict": verdict,
+            "reasons": reasons,
+            "plan_id": plan.id,
+            "conflicts": conflicts,
+            "ai_proposal": ai_proposal,
+        },
     )
 
     parent = session.get(Task, plan.task_id)
@@ -353,7 +452,6 @@ def finalize_judge(
                 session, task=parent, reason=f"judge_reject:{','.join(reasons)}"
             )
         else:
-            # Repair task
             repair = create_task(
                 session,
                 title=f"Repair: {parent.title}",
@@ -368,8 +466,6 @@ def finalize_judge(
                 config=cfg,
             )
             decision.repair_tasks = [repair.id]
-            parent.status = TaskStatus.REVIEW_REQUIRED  # waiting repair cycle
-            # Actually parent stays blocked from DONE; repair is the active work
             parent.status = TaskStatus.FAILED
             session.flush()
             record_audit(

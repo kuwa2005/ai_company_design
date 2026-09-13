@@ -77,7 +77,13 @@ def start_cmd(
         "--dispatch",
         help="After planning, run scheduler once (CLI layer — not Secretary spawn)",
     ),
-    runner: str = typer.Option("mock", "--runner", help="mock | cursor when --dispatch"),
+    autonomous: bool = typer.Option(
+        False,
+        "--autonomous",
+        help="Run Scheduler until DONE / blocked / idle (M10 no-look loop)",
+    ),
+    max_cycles: int = typer.Option(40, "--max-cycles", help="Autonomous cycle cap"),
+    runner: str = typer.Option("mock", "--runner", help="mock | cursor when dispatching"),
 ) -> None:
     """Secretary plans Tasks + Staffing Requests. Never spawns workers itself."""
     if runner not in {"mock", "cursor"}:
@@ -87,15 +93,38 @@ def start_cmd(
         console.print(f"[green]Project[/green] {result.project.id}  {result.project.name}")
         console.print(f"Tasks created: {len(result.tasks)}")
         console.print(f"Staffing requests: {len(result.staffing)}")
+        console.print(f"Validation proposals: {len(result.validation_requests)}")
         for t in result.tasks:
-            console.print(f"  - [{t.status}] {t.id}  {t.title}  role={t.role_required}")
+            console.print(
+                f"  - [{t.status}] {t.id}  {t.title}  role={t.role_required} "
+                f"risk={t.risk_level}"
+            )
         for s in result.staffing:
             console.print(
                 f"  - staffing {s.id}  role={s.role}  x{s.requested_count}  ({s.status})"
             )
+        for vr in result.validation_requests:
+            console.print(
+                f"  - validation risk={vr.risk_level} required={vr.required_review_types}"
+            )
         console.print("")
         console.print(result.summary)
-        if dispatch:
+        if autonomous:
+            from ai_company.services.autonomous import run_autonomous
+
+            auto = run_autonomous(
+                session,
+                project_id=result.project.id,
+                max_cycles=max_cycles,
+                runner=runner,  # type: ignore[arg-type]
+            )
+            console.print("")
+            console.print(
+                f"[cyan]Autonomous[/cyan] cycles={auto.cycles} started={auto.started_total} "
+                f"stopped={auto.stopped_reason} rc={auto.release_candidate_id}"
+            )
+            console.print(human_summary(session, project_id=result.project.id))
+        elif dispatch:
             # Dispatch is owned by CLI → Scheduler, not Secretary.
             sched = run_once(session, runner=runner)  # type: ignore[arg-type]
             console.print("")
@@ -292,13 +321,45 @@ def staffing_list(
         table.add_column("ID")
         table.add_column("Role")
         table.add_column("Requested")
+        table.add_column("Approved")
         table.add_column("Status")
         table.add_column("Reason")
         for r in rows:
             table.add_row(
-                r.id, r.role, str(r.requested_count), r.status, r.reason[:60]
+                r.id,
+                r.role,
+                str(r.requested_count),
+                str(r.approved_count),
+                r.status,
+                r.reason[:60],
             )
         console.print(table)
+
+
+@staffing_app.command("approve")
+def staffing_approve(
+    request_id: str = typer.Argument(..., help="Staffing request id"),
+    count: Optional[int] = typer.Option(None, "--count", help="Approved headcount"),
+) -> None:
+    from ai_company.services.staffing import approve_staffing
+
+    with session_scope() as session:
+        req = approve_staffing(session, request_id=request_id, approved_count=count)
+        console.print(
+            f"[green]Approved[/green] {req.id} role={req.role} x{req.approved_count}"
+        )
+
+
+@staffing_app.command("reject")
+def staffing_reject(
+    request_id: str = typer.Argument(..., help="Staffing request id"),
+    reason: str = typer.Option("", "--reason"),
+) -> None:
+    from ai_company.services.staffing import reject_staffing
+
+    with session_scope() as session:
+        req = reject_staffing(session, request_id=request_id, reason=reason)
+        console.print(f"[yellow]Rejected[/yellow] {req.id}")
 
 
 @approval_app.command("list")

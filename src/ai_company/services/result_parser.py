@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,9 @@ class ParsedResult:
 
 
 _REQUIRED = ("status",)
+_REVIEW_VERDICTS = frozenset({"PASS", "FAIL", "UNCERTAIN"})
+_JUDGE_VERDICTS = frozenset({"PASS", "REJECT", "HUMAN_ESCALATION"})
+_FINDING_SEVERITIES = frozenset({"critical", "high", "medium", "low", "info"})
 
 
 def _coerce_dict(data: Any) -> dict[str, Any] | None:
@@ -38,7 +41,7 @@ def _unwrap_agent_envelope(data: dict[str, Any]) -> dict[str, Any]:
 
     Prefer the inner payload when present.
     """
-    if "status" in data:
+    if "status" in data or "verdict" in data:
         return data
     if data.get("type") == "result" and "result" in data:
         inner = _coerce_dict(data["result"])
@@ -70,6 +73,26 @@ def _try_load(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _normalize_finding(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    severity = str(raw.get("severity") or "medium").lower()
+    if severity not in _FINDING_SEVERITIES:
+        severity = "medium"
+    evidence = raw.get("evidence") or []
+    if isinstance(evidence, str):
+        evidence = [evidence]
+    if not isinstance(evidence, list):
+        evidence = []
+    return {
+        "severity": severity,
+        "category": str(raw.get("category") or "general"),
+        "description": str(raw.get("description") or raw.get("message") or ""),
+        "evidence": [str(e) for e in evidence],
+        "recommended_fix": str(raw.get("recommended_fix") or ""),
+    }
+
+
 def parse_structured_result(stdout: str) -> ParsedResult:
     data = _try_load(stdout)
     if data is None:
@@ -94,3 +117,118 @@ def parse_structured_result(stdout: str) -> ParsedResult:
     if status != "completed":
         return ParsedResult(ok=False, result=normalized, error="status_not_completed")
     return ParsedResult(ok=True, result=normalized, error=None)
+
+
+def parse_reviewer_result(stdout: str) -> ParsedResult:
+    """
+    Reviewer structured output (No-look).
+
+    Accepts either:
+      {"verdict":"PASS|FAIL|UNCERTAIN", ...}
+    or coding-style status with optional verdict:
+      {"status":"completed","verdict":"PASS", ...}
+    """
+    data = _try_load(stdout)
+    if data is None:
+        return ParsedResult(ok=False, result=None, error="unparseable_or_missing_json")
+
+    verdict_raw = data.get("verdict")
+    status = str(data.get("status", "")).lower() if data.get("status") is not None else ""
+
+    if verdict_raw is None:
+        if status == "completed":
+            verdict_raw = "PASS"
+        elif status == "failed":
+            verdict_raw = "FAIL"
+        else:
+            return ParsedResult(ok=False, result=data, error="missing_field:verdict")
+
+    verdict = str(verdict_raw).upper()
+    if verdict in {"COMPLETED", "SUCCESS", "OK"}:
+        verdict = "PASS"
+    if verdict not in _REVIEW_VERDICTS:
+        return ParsedResult(ok=False, result=data, error=f"invalid_verdict:{verdict}")
+
+    # Explicit failed status without FAIL/UNCERTAIN is not a successful review run
+    if status == "failed" and verdict == "PASS":
+        return ParsedResult(ok=False, result=data, error="status_failed_with_pass_verdict")
+
+    findings_raw = data.get("findings") or []
+    findings: list[dict[str, Any]] = []
+    if isinstance(findings_raw, list):
+        for item in findings_raw:
+            normalized_finding = _normalize_finding(item)
+            if normalized_finding is not None:
+                findings.append(normalized_finding)
+
+    evidence = data.get("evidence") or []
+    if isinstance(evidence, str):
+        evidence = [evidence]
+    if not isinstance(evidence, list):
+        evidence = []
+
+    try:
+        confidence = float(data.get("confidence", 0.8))
+    except (TypeError, ValueError):
+        confidence = 0.8
+    confidence = max(0.0, min(1.0, confidence))
+
+    normalized = {
+        "status": "completed",
+        "verdict": verdict,
+        "summary": str(data.get("summary") or ""),
+        "findings": findings,
+        "evidence": evidence,
+        "confidence": confidence,
+    }
+    # FAIL/UNCERTAIN are still successful *executions* (worker completed review)
+    return ParsedResult(ok=True, result=normalized, error=None)
+
+
+def parse_judge_result(stdout: str) -> ParsedResult:
+    """Judge structured output. Hard rules remain authoritative; this captures AI proposal."""
+    data = _try_load(stdout)
+    if data is None:
+        return ParsedResult(ok=False, result=None, error="unparseable_or_missing_json")
+
+    verdict_raw = data.get("verdict")
+    status = str(data.get("status", "")).lower() if data.get("status") is not None else ""
+    if verdict_raw is None:
+        if status == "completed":
+            verdict_raw = "PASS"
+        elif status == "failed":
+            verdict_raw = "REJECT"
+        else:
+            return ParsedResult(ok=False, result=data, error="missing_field:verdict")
+
+    verdict = str(verdict_raw).upper()
+    if verdict in {"FAIL", "FAILED"}:
+        verdict = "REJECT"
+    if verdict not in _JUDGE_VERDICTS:
+        return ParsedResult(ok=False, result=data, error=f"invalid_verdict:{verdict}")
+
+    def _list_field(name: str) -> list[Any]:
+        value = data.get(name) or []
+        return value if isinstance(value, list) else []
+
+    normalized = {
+        "status": "completed",
+        "verdict": verdict,
+        "reason": str(data.get("reason") or data.get("summary") or ""),
+        "blocking_findings": _list_field("blocking_findings"),
+        "non_blocking_findings": _list_field("non_blocking_findings"),
+        "conflicts": _list_field("conflicts"),
+        "repair_tasks": _list_field("repair_tasks"),
+    }
+    return ParsedResult(ok=True, result=normalized, error=None)
+
+
+RoleParseKind = Literal["coding", "reviewer", "judge"]
+
+
+def parse_for_kind(stdout: str, kind: RoleParseKind) -> ParsedResult:
+    if kind == "reviewer":
+        return parse_reviewer_result(stdout)
+    if kind == "judge":
+        return parse_judge_result(stdout)
+    return parse_structured_result(stdout)

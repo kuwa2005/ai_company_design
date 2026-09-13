@@ -208,7 +208,7 @@ def test_19_human_escalation_on_uncertain(db_session: Session, tmp_env: Path) ->
         )
     )
     db_session.flush()
-    verdict, reasons = apply_judge_hard_rules(db_session, plan=plan)
+    verdict, reasons = apply_judge_hard_rules(db_session, plan=plan)[:2]
     assert verdict == "HUMAN_ESCALATION"
     assert any("uncertain" in r for r in reasons)
 

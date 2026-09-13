@@ -80,6 +80,7 @@ def create_task(
     validation_plan_id: str | None = None,
     review_type: str | None = None,
     source_execution_id: str | None = None,
+    acceptance_criteria: str | None = None,
     config: AppConfig | None = None,
 ) -> Task:
     cfg = config or load_config()
@@ -103,6 +104,7 @@ def create_task(
         validation_plan_id=validation_plan_id,
         review_type=review_type,
         source_execution_id=source_execution_id,
+        acceptance_criteria=acceptance_criteria or "",
         status=TaskStatus.BACKLOG,
         priority=priority,
         max_retries=max_retries if max_retries is not None else cfg.default_max_retries,

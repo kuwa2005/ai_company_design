@@ -125,3 +125,73 @@ def test_cursor_runner_timeout_terminates(
     executions = list(db_session.scalars(select(Execution)).all())
     assert executions[0].success is False
     assert executions[0].result_json.get("timed_out") is True
+
+
+def test_cursor_reviewer_saves_validation_result(
+    db_session: Session, tmp_env: Path
+) -> None:
+    """M5: Cursor Review Task -> PASS/FAIL + evidence in ValidationResult."""
+    from ai_company.config import clear_config_cache
+    from ai_company.db.models import Artifact, ValidationResult
+    from ai_company.enums import TaskStatus
+    from tests.conftest import write_settings_override
+
+    write_settings_override(
+        tmp_env,
+        scheduler={"max_validation_workers": 8, "max_concurrent_workers": 12},
+    )
+    clear_config_cache()
+
+    coding_payload = {
+        "status": "completed",
+        "changed_files": ["src/app.py"],
+        "tests": {"passed": 1, "failed": 0},
+        "commit": None,
+        "issues": [],
+    }
+    review_payload = {
+        "verdict": "PASS",
+        "summary": "tests look independent",
+        "findings": [],
+        "evidence": ["pytest -q"],
+        "confidence": 0.93,
+    }
+    judge_payload = {
+        "verdict": "PASS",
+        "reason": "all required reviews passed",
+        "blocking_findings": [],
+        "repair_tasks": [],
+    }
+
+    responses = [
+        MagicMock(returncode=0, stdout=json.dumps(coding_payload), stderr=""),
+        MagicMock(returncode=0, stdout=json.dumps(review_payload), stderr=""),
+        MagicMock(returncode=0, stdout=json.dumps(judge_payload), stderr=""),
+    ]
+
+    task = create_task(
+        db_session, title="cursor-nolook", priority=70, risk_level="low"
+    )
+    with patch(
+        "ai_company.services.cursor_runner.subprocess.run", side_effect=responses
+    ) as run:
+        # coding -> validation -> judge (low risk = test only)
+        for _ in range(3):
+            run_once(db_session, runner="cursor", max_to_start=4)
+            db_session.refresh(task)
+            if task.status == TaskStatus.DONE:
+                break
+        assert run.call_count >= 3
+
+    db_session.refresh(task)
+    assert task.status == TaskStatus.DONE
+    results = list(db_session.scalars(select(ValidationResult)).all())
+    assert results
+    assert results[0].verdict == "PASS"
+    assert results[0].evidence
+    arts = list(db_session.scalars(select(Artifact)).all())
+    assert arts
+    executions = list(db_session.scalars(select(Execution)).all())
+    kinds = {e.result_json.get("parse_kind") for e in executions if e.result_json}
+    assert "reviewer" in kinds
+    assert "judge" in kinds

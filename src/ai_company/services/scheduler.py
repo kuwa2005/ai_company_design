@@ -13,6 +13,10 @@ from ai_company.enums import CostDecision
 from ai_company.services import cost_governor as cg
 from ai_company.services.audit import record_audit
 from ai_company.services.cleanup import run_cleanup
+from ai_company.services.staffing import (
+    auto_approve_open_requests,
+    note_staffing_hire,
+)
 from ai_company.services.tasks import list_ready_tasks
 from ai_company.services.validation import is_judge_task, is_validation_task
 from ai_company.services.workers import RunnerKind, dispatch_worker, hire_worker
@@ -76,6 +80,7 @@ def run_once(
     cleanup = run_cleanup(session, config=cfg)
     result.leases_reclaimed = cleanup.leases_reclaimed
     result.zombies_killed = cleanup.zombies_killed
+    auto_approve_open_requests(session, config=cfg)
 
     slots_budget = max_to_start
     if slots_budget is None:
@@ -86,6 +91,7 @@ def run_once(
     seen_blocked_lease: set[str] = set()
     started_ids: set[str] = set()
     started_validation_by_plan: dict[str, int] = {}
+    started_by_role: dict[str, int] = {}
 
     while started < slots_budget:
         ready = list_ready_tasks(session)
@@ -107,8 +113,35 @@ def run_once(
             result.details.append({"task_id": task.id, "result": "lease_held"})
             continue
 
-        # Cycle-local validation fan-out (Cost Governor also enforces DB-active counts)
-        if is_validation_task(task) or is_judge_task(task):
+        # Per-role capacity (Dynamic Staffing), including cycle-local starts
+        from ai_company.services.staffing import (
+            count_active_workers_for_role,
+            role_capacity_for,
+        )
+
+        role_cap = role_capacity_for(task.role_required, cfg)
+        if role_cap is not None:
+            active_role = count_active_workers_for_role(
+                session, role=task.role_required, project_id=task.project_id
+            )
+            cycle_role = started_by_role.get(task.role_required, 0)
+            if active_role + cycle_role >= role_cap:
+                result.throttled += 1
+                release_lease(session, task)
+                seen_blocked_lease.add(task.id)
+                result.details.append(
+                    {
+                        "task_id": task.id,
+                        "result": "THROTTLE",
+                        "reason": (
+                            f"role_capacity:{task.role_required}:"
+                            f"{active_role + cycle_role}/{role_cap}"
+                        ),
+                    }
+                )
+                continue
+
+        # Cycle-local validation fan-out (Cost Governor also enforces DB-active counts)        if is_validation_task(task) or is_judge_task(task):
             val_cap = cfg.settings.scheduler.max_validation_workers
             if (
                 cg.count_active_validation_workers(session) + started_validation
@@ -182,6 +215,9 @@ def run_once(
 
         cg.reserve_budget(session, task=task)
         worker = hire_worker(session, task=task)
+        note_staffing_hire(
+            session, project_id=task.project_id, role=task.role_required
+        )
         record_audit(
             session,
             event_type="scheduler_dispatched",
@@ -208,6 +244,9 @@ def run_once(
         result.started += 1
         started += 1
         started_ids.add(task.id)
+        started_by_role[task.role_required] = (
+            started_by_role.get(task.role_required, 0) + 1
+        )
         if is_validation_task(task) or is_judge_task(task):
             started_validation += 1
             if is_validation_task(task) and task.validation_plan_id:

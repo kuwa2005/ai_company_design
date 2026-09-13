@@ -16,3 +16,17 @@ circuit_breaker:
   failure_threshold: 5
   window_minutes: 10
   cooldown_minutes: 30
+
+staffing:
+  auto_approve: true
+  role_capacity:
+    coding_worker: 4
+    backend_engineer: 3
+    frontend_engineer: 2
+    reviewer: 4
+    judge: 2
+    test_reviewer: 2
+    spec_reviewer: 2
+    security_reviewer: 2
+    edge_case_reviewer: 2
+    architecture_reviewer: 1

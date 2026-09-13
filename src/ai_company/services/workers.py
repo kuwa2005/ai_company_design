@@ -17,7 +17,7 @@ from ai_company.services import cost_governor as cg
 from ai_company.services.audit import record_audit
 from ai_company.services.cursor_runner import run_cursor_cli
 from ai_company.services.escalation import escalate_blocked_task
-from ai_company.services.result_parser import parse_structured_result
+from ai_company.services.result_parser import parse_for_kind
 from ai_company.services.validation import (
     finalize_judge,
     is_implementation_task,
@@ -450,9 +450,17 @@ def run_cursor_worker(
         config=cfg,
         timeout_seconds=timeout_seconds,
         cwd=cfg.cursor_runner.workspace,
+        session=session,
     )
 
-    parsed = parse_structured_result(capture.stdout)
+    if is_validation_task(task):
+        parse_kind = "reviewer"
+    elif is_judge_task(task):
+        parse_kind = "judge"
+    else:
+        parse_kind = "coding"
+
+    parsed = parse_for_kind(capture.stdout, parse_kind)
     success = (
         not capture.timed_out
         and capture.exit_code == 0
@@ -467,6 +475,7 @@ def run_cursor_worker(
     }
     if capture.timed_out:
         result_json["timed_out"] = True
+    result_json["parse_kind"] = parse_kind
 
     actual_cost = task.estimated_cost if success else task.estimated_cost * 0.5
     execution = Execution(
@@ -498,6 +507,7 @@ def run_cursor_worker(
             "timed_out": capture.timed_out,
             "exit_code": capture.exit_code,
             "parse_error": parsed.error,
+            "parse_kind": parse_kind,
             "command0": capture.command[0] if capture.command else None,
         },
     )

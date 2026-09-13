@@ -62,11 +62,30 @@ class CircuitBreakerConfig(BaseModel):
     cooldown_minutes: int = 30
 
 
+class StaffingConfig(BaseModel):
+    auto_approve: bool = True
+    role_capacity: dict[str, int] = Field(
+        default_factory=lambda: {
+            "coding_worker": 4,
+            "backend_engineer": 3,
+            "frontend_engineer": 2,
+            "reviewer": 4,
+            "judge": 2,
+            "test_reviewer": 2,
+            "spec_reviewer": 2,
+            "security_reviewer": 2,
+            "edge_case_reviewer": 2,
+            "architecture_reviewer": 1,
+        }
+    )
+
+
 class SettingsConfig(BaseModel):
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
+    staffing: StaffingConfig = Field(default_factory=StaffingConfig)
 
 
 class BudgetValidationLimits(BaseModel):
