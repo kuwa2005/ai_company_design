@@ -34,6 +34,11 @@ def test_build_cursor_command_from_config(tmp_env: Path) -> None:
 def test_cursor_runner_success_saves_execution(
     db_session: Session, tmp_env: Path
 ) -> None:
+    from tests.conftest import write_validation_override
+    from ai_company.config import clear_config_cache
+
+    write_validation_override(tmp_env, validation={"enabled": False})
+    clear_config_cache()
     payload = {
         "status": "completed",
         "changed_files": ["src/x.py"],
@@ -76,6 +81,11 @@ def test_cursor_runner_success_saves_execution(
 def test_cursor_runner_broken_json_not_success(
     db_session: Session, tmp_env: Path
 ) -> None:
+    from tests.conftest import write_validation_override
+    from ai_company.config import clear_config_cache
+
+    write_validation_override(tmp_env, validation={"enabled": False})
+    clear_config_cache()
     completed = MagicMock()
     completed.returncode = 0
     completed.stdout = "I finished but forgot JSON"
@@ -95,6 +105,11 @@ def test_cursor_runner_broken_json_not_success(
 def test_cursor_runner_timeout_terminates(
     db_session: Session, tmp_env: Path
 ) -> None:
+    from tests.conftest import write_validation_override
+    from ai_company.config import clear_config_cache
+
+    write_validation_override(tmp_env, validation={"enabled": False})
+    clear_config_cache()
     task = create_task(db_session, title="slow", priority=50, max_retries=2)
 
     def _raise(*_a, **_k):

@@ -14,7 +14,7 @@ from ai_company.enums import BudgetKind, TaskStatus, WorkerStatus
 from ai_company.services import cost_governor as cg
 from ai_company.services.scheduler import run_once
 from ai_company.services.tasks import create_task
-from tests.conftest import write_budget_override, write_settings_override
+from tests.conftest import write_budget_override, write_settings_override, write_validation_override
 
 
 def test_queue_ready_on_create(db_session: Session, tmp_env: Path) -> None:
@@ -23,20 +23,20 @@ def test_queue_ready_on_create(db_session: Session, tmp_env: Path) -> None:
 
 
 def test_dependency_waiting_then_ready(db_session: Session, tmp_env: Path) -> None:
+    write_validation_override(tmp_env, validation={"enabled": False})
+    clear_config_cache()
     a = create_task(db_session, title="schema", priority=80)
     b = create_task(db_session, title="api", priority=70, depends_on=[a.id])
     assert a.status == TaskStatus.READY
     assert b.status == TaskStatus.WAITING
 
-    # coding then review for A (need 2 slots across cycles if max_to_start=1)
-    run_once(db_session, max_to_start=1)
     run_once(db_session, max_to_start=1)
     db_session.refresh(a)
     db_session.refresh(b)
     assert a.status == TaskStatus.DONE
     assert b.status == TaskStatus.READY
 
-    run_once(db_session, max_to_start=2)
+    run_once(db_session, max_to_start=1)
     db_session.refresh(b)
     assert b.status == TaskStatus.DONE
 
@@ -45,8 +45,8 @@ def test_concurrency_cap(db_session: Session, tmp_env: Path) -> None:
     write_settings_override(
         tmp_env,
         scheduler={"max_concurrent_workers": 2},
-        review={"enabled": False},
     )
+    write_validation_override(tmp_env, validation={"enabled": False})
     clear_config_cache()
     for i in range(10):
         create_task(db_session, title=f"t{i}", priority=50)
@@ -118,8 +118,8 @@ def test_retry_then_blocked(db_session: Session, tmp_env: Path) -> None:
     write_settings_override(
         tmp_env,
         retry={"default_max_retries": 1},
-        review={"enabled": False},
     )
+    write_validation_override(tmp_env, validation={"enabled": False})
     clear_config_cache()
     task = create_task(db_session, title="flaky", priority=50, max_retries=1)
 
@@ -182,7 +182,7 @@ def test_budget_reservation_no_double_spend(db_session: Session, tmp_env: Path) 
             "monthly": {"soft_limit_usd": 0.15, "hard_limit_usd": 0.15},
         },
     )
-    write_settings_override(tmp_env, review={"enabled": False})
+    write_validation_override(tmp_env, validation={"enabled": False})
     clear_config_cache()
     # Two tasks each costing 0.10; only one should fit under hard 0.15
     a = create_task(db_session, title="a", priority=80, estimated_cost=0.10)

@@ -90,12 +90,16 @@ def test_dependency_chain_from_secretary(db_session: Session, tmp_env: Path) -> 
 
 
 def test_scheduler_not_secretary_dispatches(db_session: Session, tmp_env: Path) -> None:
+    from tests.conftest import write_validation_override
+    from ai_company.config import clear_config_cache
+
+    write_validation_override(tmp_env, validation={"enabled": False})
+    clear_config_cache()
     result = start_goal(db_session, "小さなツールを作る")
     assert list(db_session.scalars(select(Worker)).all()) == []
 
-    # Only Scheduler path creates workers; allow coding + review
     sched = run_once(db_session, runner="mock", max_to_start=2)
     assert sched.started >= 1
     assert list(db_session.scalars(select(Worker)).all())
     tasks = list(db_session.scalars(select(Task)).all())
-    assert any(t.status in {TaskStatus.DONE, TaskStatus.REVIEW} for t in tasks)
+    assert any(t.status == TaskStatus.DONE for t in tasks)

@@ -23,7 +23,13 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
 
     # Copy repo config with optional overrides applied by individual tests
     repo_cfg = Path(__file__).resolve().parents[1] / "config"
-    for name in ("settings.yaml", "budget.yaml", "permissions.yaml", "cursor_runner.yaml"):
+    for name in (
+        "settings.yaml",
+        "budget.yaml",
+        "permissions.yaml",
+        "cursor_runner.yaml",
+        "validation.yaml",
+    ):
         (cfg / name).write_text((repo_cfg / name).read_text(encoding="utf-8"), encoding="utf-8")
 
     monkeypatch.setenv("AI_COMPANY_DATA_DIR", str(data))
@@ -58,6 +64,18 @@ def write_budget_override(tmp_env: Path, **budget_updates: object) -> None:
 
 def write_settings_override(tmp_env: Path, **updates: object) -> None:
     path = tmp_env / "config" / "settings.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    for k, v in updates.items():
+        if isinstance(v, dict) and isinstance(data.get(k), dict):
+            data[k] = {**data[k], **v}
+        else:
+            data[k] = v
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    clear_config_cache()
+
+
+def write_validation_override(tmp_env: Path, **updates: object) -> None:
+    path = tmp_env / "config" / "validation.yaml"
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     for k, v in updates.items():
         if isinstance(v, dict) and isinstance(data.get(k), dict):
