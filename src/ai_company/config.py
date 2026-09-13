@@ -76,8 +76,10 @@ class BudgetConfig(BaseModel):
 class CursorRunnerConfig(BaseModel):
     executable: str = "agent"
     print_mode_flag: str = "-p"
+    output_format_flag: str = "--output-format"
     output_format: str = "json"
     timeout_minutes: int = 45
+    workspace: str | None = None
 
 
 class CursorRunnerFile(BaseModel):

@@ -2,5 +2,7 @@ cursor_runner:
   # 実装時点でCursor公式CLI仕様を確認し変更可能にすること
   executable: agent
   print_mode_flag: "-p"
+  output_format_flag: "--output-format"
   output_format: json
   timeout_minutes: 45
+  # workspace: null  # optional --workspace path
