@@ -82,6 +82,7 @@ def run_once(
     result.leases_reclaimed = cleanup.leases_reclaimed
     result.zombies_killed = cleanup.zombies_killed
     auto_approve_open_requests(session, config=cfg)
+    cg.revive_deferred_budget_tasks(session, config=cfg)
 
     slots_budget = max_to_start
     if slots_budget is None:

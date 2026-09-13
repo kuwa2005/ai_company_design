@@ -45,6 +45,9 @@ class BudgetSnapshot:
 
     @property
     def usable(self) -> float:
+        # hard_limit <= 0: subscription mode (no USD hard cap)
+        if self.hard_limit <= 0:
+            return float("inf")
         return max(0.0, self.hard_limit - self.spent - self.reserved)
 
     @property
@@ -53,6 +56,10 @@ class BudgetSnapshot:
         if self.soft_limit <= 0:
             return 0.0
         return (self.spent + self.reserved) / self.soft_limit
+
+    @property
+    def subscription_mode(self) -> bool:
+        return self.hard_limit <= 0 and self.soft_limit <= 0
 
 
 def _utcnow() -> datetime:
@@ -262,8 +269,9 @@ def evaluate(
             usage_ratio=snap.soft_usage_ratio,
         )
 
-    # hard monthly
-    if snap.spent + snap.reserved + task.estimated_cost > cfg.budget.budget.monthly.hard_limit_usd:
+    # hard monthly ($0 hard = subscription mode: do not block on internal USD ledger)
+    hard = cfg.budget.budget.monthly.hard_limit_usd
+    if hard > 0 and snap.spent + snap.reserved + task.estimated_cost > hard:
         return CostVerdict(
             decision=CostDecision.DENY,
             reason="monthly_hard_limit",
@@ -280,7 +288,7 @@ def evaluate(
             effective_max_workers=0,
             usage_ratio=snap.soft_usage_ratio,
         )
-    if snap.hourly_spent + task.estimated_cost > b.hourly.max_cost_usd:
+    if b.hourly.max_cost_usd > 0 and snap.hourly_spent + task.estimated_cost > b.hourly.max_cost_usd:
         return CostVerdict(
             decision=CostDecision.DEFER,
             reason="hourly_max_cost",
@@ -294,7 +302,7 @@ def evaluate(
             effective_max_workers=0,
             usage_ratio=snap.soft_usage_ratio,
         )
-    if snap.daily_spent + task.estimated_cost > b.daily.max_cost_usd:
+    if b.daily.max_cost_usd > 0 and snap.daily_spent + task.estimated_cost > b.daily.max_cost_usd:
         return CostVerdict(
             decision=CostDecision.DEFER,
             reason="daily_max_cost",
@@ -524,3 +532,37 @@ def deny_and_defer(session: Session, *, task: Task, verdict: CostVerdict) -> Non
         target_id=task.id,
         metadata={"decision": verdict.decision, "reason": verdict.reason},
     )
+
+
+def revive_deferred_budget_tasks(
+    session: Session, *, config: AppConfig | None = None
+) -> int:
+    """Move DEFERRED_BUDGET back to READY when Cost Governor would no longer hard-deny."""
+    cfg = config or load_config()
+    deferred = list(
+        session.scalars(
+            select(Task).where(Task.status == TaskStatus.DEFERRED_BUDGET)
+        ).all()
+    )
+    revived = 0
+    for task in deferred:
+        verdict = evaluate(session, task=task, config=cfg)
+        sticky = verdict.decision == CostDecision.DENY and verdict.reason.startswith(
+            ("monthly_hard", "project_hard", "usage_exhausted", "circuit")
+        )
+        if sticky:
+            continue
+        task.status = TaskStatus.READY
+        revived += 1
+        record_audit(
+            session,
+            event_type="task_ready",
+            actor_type="system",
+            actor_id="cost_governor",
+            target_type="task",
+            target_id=task.id,
+            metadata={"from": TaskStatus.DEFERRED_BUDGET, "reason": "budget_revived"},
+        )
+    if revived:
+        session.flush()
+    return revived

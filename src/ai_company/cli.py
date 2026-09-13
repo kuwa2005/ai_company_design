@@ -345,7 +345,10 @@ def budget_status() -> None:
         snap = get_budget_snapshot(session)
         console.print(f"使用済み:   ${snap.spent:.2f}")
         console.print(f"予約中:     ${snap.reserved:.2f}")
-        console.print(f"利用可能:   ${snap.usable:.2f}")
+        if snap.hard_limit <= 0:
+            console.print("利用可能:   制限なし（Cursor購読モード・USD上限なし）")
+        else:
+            console.print(f"利用可能:   ${snap.usable:.2f}")
         console.print(f"ソフト上限: ${snap.soft_limit:.2f}  （使用率={snap.soft_usage_ratio:.0%}）")
         console.print(f"ハード上限: ${snap.hard_limit:.2f}")
         console.print(f"直近1時間:  {snap.hourly_runs} 回 / ${snap.hourly_spent:.2f}")

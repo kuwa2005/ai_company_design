@@ -471,7 +471,11 @@ def human_summary(session: Session, *, project_id: str | None = None) -> str:
         f"本日の内部コスト: ${snap.daily_spent:.2f}（上限 ${snap.soft_limit:.2f}）",
         f"月次使用率: {snap.soft_usage_ratio:.0%} "
         f"（${snap.spent + snap.reserved:.2f} / ${snap.soft_limit:.2f}）",
-        f"ハード上限の残り: ${snap.usable:.2f}",
+        (
+            "ハード上限の残り: 制限なし（購読モード）"
+            if snap.hard_limit <= 0
+            else f"ハード上限の残り: ${snap.usable:.2f}"
+        ),
         f"人間の判断が必要: {decisions}",
         "",
         "例外:",
@@ -572,6 +576,7 @@ def human_next_actions(
     review = _tasks(TaskStatus.REVIEW_REQUIRED)
     blocked = _tasks(TaskStatus.BLOCKED)
     running = _tasks(TaskStatus.RUNNING)
+    deferred = _tasks(TaskStatus.DEFERRED_BUDGET)
     pending = list(
         session.scalars(
             select(Approval)
@@ -609,6 +614,11 @@ def human_next_actions(
                 lines.append(f"  原因: {_explain_block_reason(matched.reason)}")
             else:
                 lines.append("  原因: 再試行上限または判定により停止（詳細は承認一覧を確認）")
+    if deferred:
+        lines.append("")
+        lines.append("【予算待ち】")
+        for t in deferred[:8]:
+            lines.append(f"- {t.id}  「{t.title}」")
     if ready:
         lines.append("")
         lines.append("【実行待ち】")
@@ -662,9 +672,15 @@ def human_next_actions(
             lines.append(f"   ai-company validation status {t.id}")
         return "\n".join(lines)
 
-    # Priority 2: more work ready / throttled → run again
-    if ready or throttled > 0 or review:
-        lines.append("いまやることは、もう一度スケジューラを回すことです。")
+    # Priority 2: more work ready / throttled / deferred → run again
+    if ready or throttled > 0 or review or deferred:
+        if deferred and not ready:
+            lines.append(
+                "予算待ちタスクがあります。"
+                "購読モード（USD上限 $0）なら次のスケジューラ実行で再開できます。"
+            )
+        else:
+            lines.append("いまやることは、もう一度スケジューラを回すことです。")
         lines.append("同じディレクトリで、次を繰り返してください:")
         lines.append("")
         lines.append(f"   ai-company scheduler run-once --runner {runner}")

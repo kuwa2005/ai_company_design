@@ -79,6 +79,38 @@ def test_hard_budget_blocks_workers(db_session: Session, tmp_env: Path) -> None:
     assert workers == []
 
 
+def test_subscription_zero_budget_allows_after_spend(db_session: Session, tmp_env: Path) -> None:
+    """$0 hard/soft = Cursor subscription mode: internal spend must not block."""
+    write_budget_override(
+        tmp_env,
+        budget={
+            "hourly": {"max_runs": 1000, "max_cost_usd": 0},
+            "daily": {"max_runs": 1000, "max_cost_usd": 0},
+            "monthly": {"soft_limit_usd": 0, "hard_limit_usd": 0},
+        },
+    )
+    clear_config_cache()
+    db_session.add(
+        BudgetEntry(
+            id="BUD-SUB-SPEND",
+            scope_type="task",
+            scope_id="prior",
+            amount=12.34,
+            kind=BudgetKind.SPEND,
+        )
+    )
+    db_session.flush()
+    task = create_task(db_session, title="continue", priority=90, estimated_cost=0.5)
+    task.status = TaskStatus.DEFERRED_BUDGET
+    db_session.flush()
+
+    result = run_once(db_session)
+    assert result.denied == 0
+    assert result.started >= 1
+    db_session.refresh(task)
+    assert task.status != TaskStatus.DEFERRED_BUDGET
+
+
 def test_soft_budget_throttle_reduces_capacity(db_session: Session, tmp_env: Path) -> None:
     # Spend enough to enter critical tier (0.95 of soft=200 => 190)
     write_budget_override(
