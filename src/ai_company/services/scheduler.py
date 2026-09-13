@@ -143,7 +143,8 @@ def run_once(
                 )
                 continue
 
-        # Cycle-local validation fan-out (Cost Governor also enforces DB-active counts)        if is_validation_task(task) or is_judge_task(task):
+        # Cycle-local validation fan-out (Cost Governor also enforces DB-active counts)
+        if is_validation_task(task) or is_judge_task(task):
             val_cap = cfg.settings.scheduler.max_validation_workers
             if (
                 cg.count_active_validation_workers(session) + started_validation
