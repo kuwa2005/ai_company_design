@@ -38,6 +38,18 @@ def test_human_next_actions_for_judge_reject(db_session: Session, tmp_env) -> No
     assert task.id in text
 
 
+def test_human_next_actions_blocked_without_pending_is_not_urgent(
+    db_session: Session, tmp_env
+) -> None:
+    task = create_task(db_session, title="データモデル設計", priority=80)
+    task.status = TaskStatus.BLOCKED
+    db_session.flush()
+    text = human_next_actions(db_session, project_id=task.project_id)
+    assert "急いで打つコマンドはありません" in text
+    assert "必須作業ではありません" in text
+    assert "validation status" in text
+
+
 def test_human_next_actions_throttle_points_to_continue(
     db_session: Session, tmp_env
 ) -> None:

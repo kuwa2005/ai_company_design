@@ -669,9 +669,22 @@ def human_next_actions(
         return "\n".join(lines)
 
     if blocked and not pending:
-        lines.append("停止タスクがありますが承認キューが空です。")
+        lines.append("いま人が急いで打つコマンドはありません。")
+        lines.append(
+            "停止タスクは残っていますが、承認キューは空です"
+            "（すでに「いいえ／再度検討せよ」済み、または承認が作られていない状態）。"
+        )
+        lines.append("")
+        lines.append("意味:")
+        lines.append("- 機械は自動では進めません（意図どおりの停止）")
+        lines.append("- `validation status` は任意の調査用であり、必須作業ではありません")
+        lines.append("")
+        lines.append("人がやるなら次のいずれかです（任意）:")
+        lines.append("- 方針を決めてから、再実行したいタスクを承認し直す／作り直す")
+        lines.append("- この停止のまま後続を進めない（依存待ちはそのまま残る）")
+        lines.append("")
         for t in blocked:
-            lines.append(f"   ai-company validation status {t.id}")
+            lines.append(f"  参考（任意）: ai-company validation status {t.id}")
         return "\n".join(lines)
 
     # Priority 2: more work ready / throttled / deferred → machine continues, not human
