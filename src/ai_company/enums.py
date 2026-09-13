@@ -1,4 +1,4 @@
-"""Enums for task / worker / budget lifecycle."""
+"""Enums for task / worker / budget / validation lifecycle."""
 
 from __future__ import annotations
 
@@ -10,12 +10,20 @@ class TaskStatus(StrEnum):
     WAITING = "WAITING"
     READY = "READY"
     RUNNING = "RUNNING"
-    REVIEW = "REVIEW"
+    REVIEW = "REVIEW"  # legacy alias
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
     DONE = "DONE"
     FAILED = "FAILED"
     BLOCKED = "BLOCKED"
     CANCELLED = "CANCELLED"
     DEFERRED_BUDGET = "DEFERRED_BUDGET"
+
+
+class TaskKind(StrEnum):
+    IMPLEMENTATION = "implementation"
+    VALIDATION = "validation"
+    JUDGE = "judge"
+    REPAIR = "repair"
 
 
 class WorkerStatus(StrEnum):
@@ -64,3 +72,22 @@ class ApprovalStatus(StrEnum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+
+
+class ReviewVerdict(StrEnum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    UNCERTAIN = "UNCERTAIN"
+
+
+class JudgeVerdict(StrEnum):
+    PASS = "PASS"
+    REJECT = "REJECT"
+    HUMAN_ESCALATION = "HUMAN_ESCALATION"
+
+
+class ValidationPlanStatus(StrEnum):
+    OPEN = "OPEN"
+    WAITING_REVIEWS = "WAITING_REVIEWS"
+    JUDGING = "JUDGING"
+    CLOSED = "CLOSED"

@@ -47,6 +47,11 @@ class Task(Base):
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     objective: Mapped[str] = mapped_column(Text, default="")
     role_required: Mapped[str] = mapped_column(String(64), default="coding_worker")
+    kind: Mapped[str] = mapped_column(String(32), default="implementation", index=True)
+    risk_level: Mapped[str] = mapped_column(String(32), default="medium")
+    validation_plan_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_execution_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    review_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="BACKLOG", index=True)
     priority: Mapped[int] = mapped_column(Integer, default=50, index=True)
     constraints: Mapped[str] = mapped_column(Text, default="")
@@ -179,3 +184,45 @@ class CircuitBreakerState(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     opened_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ValidationPlan(Base):
+    __tablename__ = "validation_plans"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
+    risk_level: Mapped[str] = mapped_column(String(32), nullable=False)
+    required_review_types: Mapped[list[Any]] = mapped_column(JSON, nullable=False)
+    judge_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(32), default="OPEN", index=True)
+    source_execution_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class ValidationResult(Base):
+    __tablename__ = "validation_results"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("validation_plans.id"), nullable=False, index=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
+    review_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    execution_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    findings: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    evidence: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class JudgeDecision(Base):
+    __tablename__ = "judge_decisions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("validation_plans.id"), nullable=False, index=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
+    verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    reasons: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    conflicting_reviews: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    repair_tasks: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

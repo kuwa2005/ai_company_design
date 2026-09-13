@@ -23,6 +23,7 @@ from ai_company.services.secretary import (
     start_goal,
 )
 from ai_company.services.tasks import create_project, create_task, list_tasks
+from ai_company.services.validation import validation_status
 from ai_company.services.workers import list_workers
 
 app = typer.Typer(
@@ -120,6 +121,19 @@ def ask_cmd(
 ) -> None:
     with session_scope() as session:
         console.print(answer_question(session, question, project_id=project))
+
+
+validation_app = typer.Typer(help="Validation / Judge status")
+app.add_typer(validation_app, name="validation")
+
+
+@validation_app.command("status")
+def validation_status_cmd(
+    task_id: str = typer.Argument(..., help="Implementation or related task id"),
+) -> None:
+    with session_scope() as session:
+        info = validation_status(session, task_id)
+        console.print(info)
 
 
 @project_app.command("create")

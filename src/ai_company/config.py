@@ -41,6 +41,7 @@ class UsageTier(BaseModel):
 
 class SchedulerConfig(BaseModel):
     max_concurrent_workers: int = 4
+    max_validation_workers: int = 2
     poll_interval_seconds: int = 2
     max_workers_per_project: int = 3
 
@@ -61,17 +62,11 @@ class CircuitBreakerConfig(BaseModel):
     cooldown_minutes: int = 30
 
 
-class ReviewConfig(BaseModel):
-    enabled: bool = True
-    role: str = "reviewer"
-
-
 class SettingsConfig(BaseModel):
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
-    review: ReviewConfig = Field(default_factory=ReviewConfig)
 
 
 class BudgetConfig(BaseModel):
@@ -92,11 +87,45 @@ class CursorRunnerFile(BaseModel):
     cursor_runner: CursorRunnerConfig = Field(default_factory=CursorRunnerConfig)
 
 
+class RiskProfile(BaseModel):
+    required: list[str] = Field(default_factory=list)
+
+
+class ValidationSection(BaseModel):
+    enabled: bool = True
+    max_reviewers_per_task: int = 5
+    max_parallel_reviewers_per_task: int = 2
+    require_independent_execution: bool = True
+    coding_worker_can_self_approve: bool = False
+    risk_profiles: dict[str, RiskProfile] = Field(default_factory=dict)
+
+
+class JudgeSection(BaseModel):
+    required: bool = True
+    critical_finding_blocks_pass: bool = True
+    security_fail_blocks_pass: bool = True
+    missing_required_review_blocks_pass: bool = True
+
+
+class RepairLoopSection(BaseModel):
+    max_cycles: int = 3
+    max_total_worker_runs: int = 12
+
+
+class ValidationFile(BaseModel):
+    validation: ValidationSection = Field(default_factory=ValidationSection)
+    judge: JudgeSection = Field(default_factory=JudgeSection)
+    repair_loop: RepairLoopSection = Field(default_factory=RepairLoopSection)
+
+
 class AppConfig(BaseModel):
     settings: SettingsConfig
     budget: BudgetConfig
     cursor_runner: CursorRunnerConfig
     permissions: dict[str, Any] = Field(default_factory=dict)
+    validation: ValidationSection = Field(default_factory=ValidationSection)
+    judge: JudgeSection = Field(default_factory=JudgeSection)
+    repair_loop: RepairLoopSection = Field(default_factory=RepairLoopSection)
 
     @property
     def default_max_retries(self) -> int:
@@ -104,7 +133,6 @@ class AppConfig(BaseModel):
 
     @property
     def default_estimated_cost(self) -> float:
-        """Fallback estimated cost per mock run (USD)."""
         return 0.10
 
 
@@ -125,11 +153,15 @@ def load_config(config_root: str | None = None) -> AppConfig:
     budget = BudgetConfig.model_validate(_read_yaml(root / "budget.yaml"))
     cursor = CursorRunnerFile.model_validate(_read_yaml(root / "cursor_runner.yaml"))
     permissions = _read_yaml(root / "permissions.yaml")
+    validation_file = ValidationFile.model_validate(_read_yaml(root / "validation.yaml"))
     return AppConfig(
         settings=settings,
         budget=budget,
         cursor_runner=cursor.cursor_runner,
         permissions=permissions,
+        validation=validation_file.validation,
+        judge=validation_file.judge,
+        repair_loop=validation_file.repair_loop,
     )
 
 

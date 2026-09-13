@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ai_company.config import AppConfig, load_config
 from ai_company.db.models import Execution, Task, Worker
-from ai_company.enums import TaskStatus, WorkerStatus
+from ai_company.enums import ReviewVerdict, TaskStatus, WorkerStatus
 from ai_company.ids import new_id
 from ai_company.paths import executions_dir
 from ai_company.services import cost_governor as cg
@@ -18,13 +18,14 @@ from ai_company.services.audit import record_audit
 from ai_company.services.cursor_runner import run_cursor_cli
 from ai_company.services.escalation import escalate_blocked_task
 from ai_company.services.result_parser import parse_structured_result
-from ai_company.services.review import (
-    complete_parent_after_review_pass,
-    enqueue_review_task,
-    handle_review_reject,
-    role_requires_review,
+from ai_company.services.validation import (
+    finalize_judge,
+    is_implementation_task,
+    is_judge_task,
+    is_validation_task,
+    record_validation_result,
+    start_validation_gate,
 )
-from ai_company.services.tasks import refresh_dependents
 
 RunnerKind = Literal["mock", "cursor"]
 
@@ -98,7 +99,6 @@ def _finalize_execution(
 
     final_status = WorkerStatus.TIMED_OUT if timed_out else WorkerStatus.TERMINATED
     if not success and not timed_out:
-        # still terminate cleanly after failure
         final_status = WorkerStatus.TERMINATED
     terminate_worker(session, worker=worker, status=final_status)
 
@@ -107,9 +107,30 @@ def _finalize_execution(
 
     if success:
         cg.spend_budget(session, task=task, amount=float(actual_cost))
-        is_reviewer = not role_requires_review(task.role_required)
 
-        if is_reviewer:
+        # Judge: hard rules + decision; only Judge may mark parent DONE
+        if is_judge_task(task):
+            finalize_judge(session, judge_task=task, config=cfg)
+            return execution
+
+        # Validation reviewer: record evidence, mark this task DONE (not parent)
+        if is_validation_task(task):
+            payload = execution.result_json or {}
+            verdict = str(payload.get("verdict") or payload.get("status") or "PASS").upper()
+            if verdict in {"COMPLETED", "SUCCESS"}:
+                verdict = ReviewVerdict.PASS
+            if verdict not in {ReviewVerdict.PASS, ReviewVerdict.FAIL, ReviewVerdict.UNCERTAIN}:
+                verdict = ReviewVerdict.PASS if success else ReviewVerdict.FAIL
+            record_validation_result(
+                session,
+                validation_task=task,
+                worker_id=worker.id,
+                execution_id=execution.id,
+                verdict=verdict,
+                findings=list(payload.get("findings") or []),
+                evidence=list(payload.get("evidence") or []),
+                confidence=payload.get("confidence", 0.9),
+            )
             task.status = TaskStatus.DONE
             session.flush()
             record_audit(
@@ -119,55 +140,65 @@ def _finalize_execution(
                 actor_id=worker.id,
                 target_type="task",
                 target_id=task.id,
-                metadata={"execution_id": execution.id, "kind": "review"},
+                metadata={"execution_id": execution.id, "kind": "validation"},
             )
-            complete_parent_after_review_pass(session, review_task=task)
+            from ai_company.services.tasks import refresh_dependents
+
+            refresh_dependents(session, task.id)
             return execution
 
-        if cfg.settings.review.enabled:
-            enqueue_review_task(session, parent=task, config=cfg)
+        # Implementation / repair: NEVER self-DONE when validation enabled
+        if is_implementation_task(task):
+            if cfg.validation.enabled and not cfg.validation.coding_worker_can_self_approve:
+                start_validation_gate(
+                    session,
+                    parent=task,
+                    source_execution_id=execution.id,
+                    config=cfg,
+                )
+                return execution
+            # Fail-closed: even if disabled, do not silent self-approve in production
+            # paths; tests may set enabled=false for concurrency isolation only.
+            task.status = TaskStatus.DONE
+            session.flush()
             record_audit(
                 session,
-                event_type="task_awaiting_review",
+                event_type="task_completed",
                 actor_type="worker",
                 actor_id=worker.id,
                 target_type="task",
                 target_id=task.id,
-                metadata={"execution_id": execution.id},
+                metadata={"execution_id": execution.id, "validation_disabled": True},
             )
+            from ai_company.services.tasks import refresh_dependents
+
+            refresh_dependents(session, task.id)
             return execution
 
         task.status = TaskStatus.DONE
         session.flush()
-        record_audit(
-            session,
-            event_type="task_completed",
-            actor_type="worker",
-            actor_id=worker.id,
-            target_type="task",
-            target_id=task.id,
-            metadata={"execution_id": execution.id},
-        )
-        refresh_dependents(session, task.id)
         return execution
 
     # Failure path
     cg.release_reservation(session, task=task, amount=task.estimated_cost)
 
-    # Reviewer reject → rework parent instead of retrying the review forever
-    if not role_requires_review(task.role_required) and task.parent_task_id:
+    if is_validation_task(task):
+        # Failed validation execution → FAIL verdict recorded, task DONE so Judge can run
+        record_validation_result(
+            session,
+            validation_task=task,
+            worker_id=worker.id,
+            execution_id=execution.id,
+            verdict=ReviewVerdict.FAIL,
+            findings=[{"severity": "high", "category": "execution", "description": "validation worker failed"}],
+            evidence=[],
+            confidence=0.5,
+        )
         task.status = TaskStatus.DONE
         session.flush()
-        record_audit(
-            session,
-            event_type="task_completed",
-            actor_type="worker",
-            actor_id=worker.id,
-            target_type="task",
-            target_id=task.id,
-            metadata={"execution_id": execution.id, "review_verdict": "REJECT"},
-        )
-        handle_review_reject(session, review_task=task)
+        from ai_company.services.tasks import refresh_dependents
+
+        refresh_dependents(session, task.id)
         cg.record_failure_and_maybe_trip(session)
         return execution
 
@@ -234,30 +265,70 @@ def run_mock_worker(
 
     result: dict[str, Any]
     if succeed:
-        result = {
-            "status": "completed",
-            "changed_files": [],
-            "tests": {"passed": 1, "failed": 0},
-            "commit": None,
-            "issues": [],
-            "mock": True,
-            "task_id": task.id,
-        }
+        if is_validation_task(task):
+            result = {
+                "status": "completed",
+                "verdict": "PASS",
+                "summary": f"mock {task.review_type} pass",
+                "findings": [],
+                "evidence": [{"kind": "mock"}],
+                "confidence": 0.95,
+                "mock": True,
+                "task_id": task.id,
+            }
+        elif is_judge_task(task):
+            result = {
+                "status": "completed",
+                "verdict": "PASS",
+                "reason": "mock judge defers to hard rules",
+                "mock": True,
+                "task_id": task.id,
+            }
+        else:
+            result = {
+                "status": "completed",
+                "changed_files": [],
+                "tests": {"passed": 1, "failed": 0},
+                "commit": None,
+                "issues": [],
+                "mock": True,
+                "task_id": task.id,
+            }
         stdout_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         stderr_path.write_text("", encoding="utf-8")
         exit_code = 0
         success = True
         actual_cost = task.estimated_cost
     else:
-        result = {
-            "status": "failed",
-            "changed_files": [],
-            "tests": {"passed": 0, "failed": 1},
-            "commit": None,
-            "issues": ["mock failure"],
-            "mock": True,
-            "task_id": task.id,
-        }
+        if is_validation_task(task):
+            result = {
+                "status": "failed",
+                "verdict": "FAIL",
+                "summary": f"mock {task.review_type} fail",
+                "findings": [
+                    {
+                        "severity": "high",
+                        "category": task.review_type or "review",
+                        "description": "mock failure",
+                        "evidence": [],
+                        "recommended_fix": "repair",
+                    }
+                ],
+                "evidence": [],
+                "confidence": 0.7,
+                "mock": True,
+                "task_id": task.id,
+            }
+        else:
+            result = {
+                "status": "failed",
+                "changed_files": [],
+                "tests": {"passed": 0, "failed": 1},
+                "commit": None,
+                "issues": ["mock failure"],
+                "mock": True,
+                "task_id": task.id,
+            }
         stdout_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         stderr_path.write_text("mock failure\n", encoding="utf-8")
         exit_code = 1
