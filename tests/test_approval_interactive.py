@@ -46,8 +46,9 @@ def test_describe_approval_prompt_includes_question(db_session: Session, tmp_env
     text = describe_approval_prompt(approval, task=task)
     assert "承認確認" in text
     assert task.id in text
-    assert "はい" in text
-    assert "再度検討せよ" in text
+    assert "1) はい" in text
+    assert "2) いいえ" in text
+    assert "3) 再度検討せよ" in text
     assert "自動修正を続けてよい" in text
 
 

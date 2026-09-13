@@ -29,7 +29,7 @@ CHOICE_LABELS = {
     ApprovalChoice.RECONSIDER: "再度検討せよ",
 }
 
-PROMPT_CHOICES = [CHOICE_LABELS[c] for c in ApprovalChoice]
+PROMPT_CHOICES = ["1", "2", "3", *[CHOICE_LABELS[c] for c in ApprovalChoice]]
 
 
 def parse_approval_choice(text: str) -> ApprovalChoice | None:
@@ -84,9 +84,9 @@ def describe_approval_prompt(approval: Approval, *, task: Task | None = None) ->
             "この停止は、自動の修正回数上限に達したあとの人間判断です。",
             "質問: このまま自動修正を続けてよいですか？",
             "",
-            "  はい          … 続行を承認し、タスクを再キューします",
-            "  いいえ        … 打ち切り（自動続行しません）",
-            "  再度検討せよ  … 自動続行せず、方針の再検討が必要です",
+            "  1) はい          … 続行を承認し、タスクを再キューします",
+            "  2) いいえ        … 打ち切り（自動続行しません）",
+            "  3) 再度検討せよ  … 自動続行せず、方針の再検討が必要です",
         ]
     )
     return "\n".join(lines)
@@ -169,15 +169,15 @@ def run_interactive_approval_session(
         console.print("")
         while True:
             raw = Prompt.ask(
-                "どうしますか",
+                "どうしますか（1/2/3）",
                 choices=PROMPT_CHOICES,
-                default=CHOICE_LABELS[ApprovalChoice.RECONSIDER],
-                show_choices=True,
+                default="3",
+                show_choices=False,
             )
             choice = parse_approval_choice(raw)
             if choice is not None:
                 break
-            console.print("[red]はい / いいえ / 再度検討せよ のいずれかを選んでください。[/red]")
+            console.print("[red]1 / 2 / 3（はい / いいえ / 再度検討せよ）のいずれかを選んでください。[/red]")
 
         row = resolve_approval_choice(session, approval_id=approval.id, choice=choice)
         console.print(choice_result_message(choice, row))
