@@ -26,12 +26,20 @@ def get_engine(url: str | None = None, *, echo: bool = False) -> Engine:
         path = db_path()
         url = f"sqlite:///{path}"
 
-    engine = create_engine(url, echo=echo, future=True)
+    engine = create_engine(
+        url,
+        echo=echo,
+        future=True,
+        connect_args={"timeout": 60} if url.startswith("sqlite") else {},
+    )
 
     @event.listens_for(engine, "connect")
     def _set_sqlite_pragma(dbapi_conn: object, _connection_record: object) -> None:
         cursor = dbapi_conn.cursor()  # type: ignore[attr-defined]
         cursor.execute("PRAGMA foreign_keys=ON")
+        if url.startswith("sqlite") and "mode=memory" not in url:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=60000")
         cursor.close()
 
     if url is None or url.startswith("sqlite"):
