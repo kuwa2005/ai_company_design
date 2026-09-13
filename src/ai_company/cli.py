@@ -31,6 +31,11 @@ from ai_company.services.secretary import (
 from ai_company.services.tasks import create_project, create_task, list_tasks
 from ai_company.services.validation import validation_status
 from ai_company.services.workers import list_workers
+from ai_company.services.debug_trace import (
+    debug_enabled,
+    stuck_trace,
+    task_trace,
+)
 
 app = typer.Typer(
     name="ai-company",
@@ -184,12 +189,42 @@ def status_cmd(
     guide: bool = typer.Option(
         True, "--guide/--no-guide", help="停止時の次アクション案内を出す"
     ),
+    debug: Optional[bool] = typer.Option(
+        None,
+        "--debug/--no-debug",
+        help="トレース／デバッグ情報を出す（AI_COMPANY_DEBUG=1 でも有効）",
+    ),
 ) -> None:
     with session_scope() as session:
         console.print(human_summary(session, project_id=project))
         if guide:
             console.print("")
             console.print(human_next_actions(session, project_id=project))
+        if debug_enabled(flag=debug):
+            console.print("")
+            console.print(stuck_trace(session, project_id=project))
+
+
+debug_app = typer.Typer(help="Development debug / trace dumps")
+app.add_typer(debug_app, name="debug")
+
+
+@debug_app.command("stuck")
+def debug_stuck_cmd(
+    project: Optional[str] = typer.Option(None, "--project"),
+) -> None:
+    """Dump BLOCKED / PENDING / runtime paths for investigation."""
+    with session_scope() as session:
+        console.print(stuck_trace(session, project_id=project))
+
+
+@debug_app.command("task")
+def debug_task_cmd(
+    task_id: str = typer.Argument(..., help="Task id"),
+) -> None:
+    """Dump validation / judge / approval / audit trace for one task."""
+    with session_scope() as session:
+        console.print(task_trace(session, task_id))
 
 
 @app.command("ask")

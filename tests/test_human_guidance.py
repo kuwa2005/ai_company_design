@@ -47,7 +47,8 @@ def test_human_next_actions_blocked_without_pending_is_not_urgent(
     text = human_next_actions(db_session, project_id=task.project_id)
     assert "急いで打つコマンドはありません" in text
     assert "必須作業ではありません" in text
-    assert "validation status" in text
+    assert "ai-company debug stuck" in text
+    assert f"ai-company debug task {task.id}" in text
 
 
 def test_human_next_actions_throttle_points_to_continue(

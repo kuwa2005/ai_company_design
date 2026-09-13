@@ -683,8 +683,11 @@ def human_next_actions(
         lines.append("- 方針を決めてから、再実行したいタスクを承認し直す／作り直す")
         lines.append("- この停止のまま後続を進めない（依存待ちはそのまま残る）")
         lines.append("")
+        lines.append("開発中の調査用:")
+        lines.append("   ai-company status --debug")
+        lines.append("   ai-company debug stuck")
         for t in blocked:
-            lines.append(f"  参考（任意）: ai-company validation status {t.id}")
+            lines.append(f"   ai-company debug task {t.id}")
         return "\n".join(lines)
 
     # Priority 2: more work ready / throttled / deferred → machine continues, not human
