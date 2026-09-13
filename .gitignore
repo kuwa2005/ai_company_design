@@ -12,6 +12,7 @@ public/setup.php
 .ai_company/
 *.db
 *.db-journal
+tmp/
 
 # Python
 __pycache__/

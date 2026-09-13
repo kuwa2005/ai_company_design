@@ -50,3 +50,24 @@ Human decisions: 1
 ```
 
 人間へはTask一覧ではなく、Goal/Progress/Cost/Risk/Blocked/Decisionを優先して見せる。
+
+
+## 6. Validation CLI
+
+```bash
+ai-company validation status TASK-000127
+ai-company validation results TASK-000127
+ai-company judge show TASK-000127
+```
+
+statusでは人間にReviewerの長文をそのまま見せず、次を要約する。
+
+```text
+Validation: PASS
+Test: PASS
+Spec: PASS
+Security: PASS
+Edge cases: PASS with 1 low-risk note
+Judge: PASS
+Human action: none
+```

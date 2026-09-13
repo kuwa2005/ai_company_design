@@ -1,6 +1,7 @@
 {
-  "name": "AI Company Cursor Workforce Orchestrator",
-  "version": "0.1-design",
+  "name": "AI Company / Cursor Workforce Orchestrator Design",
+  "version": "0.2-no-look-validation",
+  "change_summary": "Integrated no-look development: independent validation workers, judge, repair loop, queue/cost controls.",
   "files": [
     "00_START_HERE.md",
     "01_PRODUCT_VISION.md",
@@ -16,13 +17,24 @@
     "11_MVP_ACCEPTANCE_TESTS.md",
     "12_SECURITY_AND_FAILURE_MODES.md",
     "13_FUTURE_EXTENSIONS.md",
+    "14_NO_LOOK_DEVELOPMENT.md",
+    "15_VALIDATION_ORCHESTRATION.md",
+    "16_MILESTONE_IMPACT_ANALYSIS.md",
     "README.md",
     "config/budget.yaml",
     "config/cursor_runner.yaml",
     "config/permissions.yaml",
     "config/settings.yaml",
+    "config/validation.yaml",
+    "prompts/architecture_reviewer.md",
     "prompts/coding_worker.md",
+    "prompts/edge_case_reviewer.md",
+    "prompts/judge.md",
     "prompts/reviewer.md",
-    "prompts/secretary.md"
+    "prompts/secretary.md",
+    "prompts/security_reviewer.md",
+    "prompts/spec_reviewer.md",
+    "prompts/test_reviewer.md",
+    "MANIFEST.json"
   ]
 }

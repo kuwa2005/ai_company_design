@@ -1,0 +1,40 @@
+validation:
+  enabled: true
+
+  max_reviewers_per_task: 5
+  max_parallel_reviewers_per_task: 2
+
+  require_independent_execution: true
+  coding_worker_can_self_approve: false
+
+  risk_profiles:
+    low:
+      required:
+        - test
+    medium:
+      required:
+        - test
+        - spec
+    high:
+      required:
+        - test
+        - spec
+        - security
+        - edge_case
+    critical:
+      required:
+        - test
+        - spec
+        - security
+        - edge_case
+        - architecture
+
+judge:
+  required: true
+  critical_finding_blocks_pass: true
+  security_fail_blocks_pass: true
+  missing_required_review_blocks_pass: true
+
+repair_loop:
+  max_cycles: 3
+  max_total_worker_runs: 12

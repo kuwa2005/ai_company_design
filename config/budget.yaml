@@ -26,3 +26,8 @@ usage_policy:
   exhausted:
     threshold: 1.00
     max_workers: 0
+
+validation:
+  default_budget_ratio: 0.30
+  max_reviewers_per_task: 5
+  max_parallel_reviewers_per_task: 2

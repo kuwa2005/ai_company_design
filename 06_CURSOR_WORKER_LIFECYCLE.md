@@ -77,3 +77,23 @@ OS差異はProcessControllerで抽象化。
 
 Worker sessionだけを会社の記憶にしない。
 DB/Artifacts/Decision Log/Auditが正本。
+
+
+## 10. Worker class
+
+```text
+implementation_worker
+validation_worker
+judge_worker
+```
+
+Validation Workerは原則read-onlyで開始し、コード変更を行わない。
+問題を発見した場合は修正内容を報告し、Repair Taskを別途Queueへ登録する。
+
+Judge Workerもコード変更禁止。
+複数Validation Resultを統合して判定のみ行う。
+
+## 11. 独立検証
+
+Coding Workerが終了したあと、同じWorker sessionをReviewerとして再利用しない。
+少なくとも別Executionとして起動し、将来は別モデル・別providerによるクロスレビューにも対応できる設計とする。

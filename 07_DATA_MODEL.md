@@ -148,3 +148,63 @@ approvals
 audit_events
 artifacts
 ```
+
+
+## 8. Validation Plan
+
+```python
+class ValidationPlan:
+    id: str
+    task_id: str
+    risk_level: str
+    required_review_types: list[str]
+    judge_required: bool
+    status: str
+```
+
+## 9. Validation Result
+
+```python
+class ValidationResult:
+    id: str
+    plan_id: str
+    task_id: str
+    review_type: str
+    worker_id: str
+    execution_id: str
+    verdict: str  # PASS / FAIL / UNCERTAIN
+    findings: list[dict]
+    evidence: list[dict]
+    confidence: float | None
+    created_at: datetime
+```
+
+## 10. Judge Decision
+
+```python
+class JudgeDecision:
+    id: str
+    plan_id: str
+    task_id: str
+    verdict: str  # PASS / REJECT / HUMAN_ESCALATION
+    reasons: list[str]
+    conflicting_reviews: list[str]
+    created_at: datetime
+```
+
+## 11. Task追加フィールド
+
+```text
+kind
+risk_level
+validation_plan_id
+source_execution_id
+```
+
+## 12. DB追加Tables
+
+```text
+validation_plans
+validation_results
+judge_decisions
+```

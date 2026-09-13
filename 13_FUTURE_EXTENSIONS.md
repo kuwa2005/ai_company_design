@@ -26,3 +26,11 @@
 - Web UI
 - API
 - MCP
+
+- Multi-model cross validation
+- Cursor内モデル切替によるReviewer diversity
+- 外部Codex / Claude等の独立検証Adapter
+- Reviewer performance scoring
+- Judge calibration
+- Validation coverage metrics
+- Human override learning / policy refinement

@@ -66,3 +66,27 @@ Human decisions required: 1
 - retry超過
 - 重大Security問題
 - AIのみでは決められない事業判断
+
+
+## 7. Validationに関する責務
+
+SecretaryはCoding Workerの完了報告だけでTaskをDONEにしてはならない。
+
+実装完了後はTaskのrisk profileに応じたValidation Requestを発行する。
+ただしSecretary自身がReviewerを直接spawnしてはならない。
+
+例:
+
+```yaml
+validation_request:
+  task_id: TASK-00127
+  risk: high
+  required_reviewers:
+    - test
+    - spec
+    - security
+    - edge_case
+  judge_required: true
+```
+
+人間への報告では、単なる「tests passed」ではなく、Judge判定と未解決リスクを要約する。

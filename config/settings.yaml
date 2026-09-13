@@ -1,5 +1,6 @@
 scheduler:
   max_concurrent_workers: 4
+  max_validation_workers: 2
   poll_interval_seconds: 2
   max_workers_per_project: 3
 
@@ -15,7 +16,3 @@ circuit_breaker:
   failure_threshold: 5
   window_minutes: 10
   cooldown_minutes: 30
-
-review:
-  enabled: true
-  role: reviewer

@@ -18,3 +18,22 @@ profiles:
       - code.read
       - test.execute
       - task.review
+
+
+  validation_reviewer:
+    permissions:
+      - code.read
+      - test.execute
+      - validation.report
+
+  security_reviewer:
+    permissions:
+      - code.read
+      - test.execute
+      - security.scan.safe
+      - validation.report
+
+  judge:
+    permissions:
+      - validation.read
+      - judge.decide

@@ -72,3 +72,44 @@ permission_denied
 ```
 
 Auditは通常ログと分離し、JSON Lines等で追跡可能にする。
+
+
+## 6. Validation権限分離
+
+```yaml
+profiles:
+  validation_reviewer:
+    permissions:
+      - code.read
+      - test.execute
+      - validation.report
+
+  security_reviewer:
+    permissions:
+      - code.read
+      - test.execute
+      - security.scan.safe
+      - validation.report
+
+  judge:
+    permissions:
+      - validation.read
+      - judge.decide
+```
+
+ReviewerとJudgeへ`code.edit`をデフォルト付与しない。
+
+Auditには以下も記録する。
+
+```text
+validation_plan_created
+validation_started
+validation_passed
+validation_failed
+validation_uncertain
+judge_started
+judge_passed
+judge_rejected
+judge_escalated
+repair_task_created
+```
