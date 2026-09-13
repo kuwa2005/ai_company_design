@@ -14,6 +14,12 @@ from ai_company.paths import audit_log_path, data_dir, db_path, executions_dir
 from ai_company.services.audit import list_audit_events
 from ai_company.services.cost_governor import get_budget_snapshot
 from ai_company.services.scheduler import run_once
+from ai_company.services.secretary import (
+    answer_question,
+    human_summary,
+    list_staffing,
+    start_goal,
+)
 from ai_company.services.tasks import create_project, create_task, list_tasks
 from ai_company.services.workers import list_workers
 
@@ -28,6 +34,7 @@ scheduler_app = typer.Typer(help="Scheduler commands")
 worker_app = typer.Typer(help="Worker commands")
 budget_app = typer.Typer(help="Budget commands")
 audit_app = typer.Typer(help="Audit commands")
+staffing_app = typer.Typer(help="Staffing request commands")
 
 app.add_typer(project_app, name="project")
 app.add_typer(task_app, name="task")
@@ -35,6 +42,7 @@ app.add_typer(scheduler_app, name="scheduler")
 app.add_typer(worker_app, name="worker")
 app.add_typer(budget_app, name="budget")
 app.add_typer(audit_app, name="audit")
+app.add_typer(staffing_app, name="staffing")
 
 console = Console()
 
@@ -54,6 +62,60 @@ def init_cmd() -> None:
     console.print(
         f"Scheduler max_concurrent_workers={cfg.settings.scheduler.max_concurrent_workers}"
     )
+
+
+@app.command("start")
+def start_cmd(
+    goal: str = typer.Argument(..., help="Human goal for Secretary to plan"),
+    dispatch: bool = typer.Option(
+        False,
+        "--dispatch",
+        help="After planning, run scheduler once (CLI layer — not Secretary spawn)",
+    ),
+    runner: str = typer.Option("mock", "--runner", help="mock | cursor when --dispatch"),
+) -> None:
+    """Secretary plans Tasks + Staffing Requests. Never spawns workers itself."""
+    if runner not in {"mock", "cursor"}:
+        raise typer.BadParameter("runner must be 'mock' or 'cursor'")
+    with session_scope() as session:
+        result = start_goal(session, goal)
+        console.print(f"[green]Project[/green] {result.project.id}  {result.project.name}")
+        console.print(f"Tasks created: {len(result.tasks)}")
+        console.print(f"Staffing requests: {len(result.staffing)}")
+        for t in result.tasks:
+            console.print(f"  - [{t.status}] {t.id}  {t.title}  role={t.role_required}")
+        for s in result.staffing:
+            console.print(
+                f"  - staffing {s.id}  role={s.role}  x{s.requested_count}  ({s.status})"
+            )
+        console.print("")
+        console.print(result.summary)
+        if dispatch:
+            # Dispatch is owned by CLI → Scheduler, not Secretary.
+            sched = run_once(session, runner=runner)  # type: ignore[arg-type]
+            console.print("")
+            console.print(
+                f"[cyan]Dispatched via Scheduler[/cyan] runner={runner} "
+                f"started={sched.started} denied={sched.denied} throttled={sched.throttled}"
+            )
+            console.print(human_summary(session, project_id=result.project.id))
+
+
+@app.command("status")
+def status_cmd(
+    project: Optional[str] = typer.Option(None, "--project", help="Project id"),
+) -> None:
+    with session_scope() as session:
+        console.print(human_summary(session, project_id=project))
+
+
+@app.command("ask")
+def ask_cmd(
+    question: str = typer.Argument(..., help="Question for Secretary about current state"),
+    project: Optional[str] = typer.Option(None, "--project"),
+) -> None:
+    with session_scope() as session:
+        console.print(answer_question(session, question, project_id=project))
 
 
 @project_app.command("create")
@@ -187,6 +249,25 @@ def audit_list(limit: int = typer.Option(20, "--limit")) -> None:
                 e.event_type,
                 f"{e.actor_type}:{e.actor_id}",
                 f"{e.target_type}:{e.target_id}",
+            )
+        console.print(table)
+
+
+@staffing_app.command("list")
+def staffing_list(
+    project: Optional[str] = typer.Option(None, "--project"),
+) -> None:
+    with session_scope() as session:
+        rows = list_staffing(session, project_id=project)
+        table = Table(title="Staffing Requests")
+        table.add_column("ID")
+        table.add_column("Role")
+        table.add_column("Requested")
+        table.add_column("Status")
+        table.add_column("Reason")
+        for r in rows:
+            table.add_row(
+                r.id, r.role, str(r.requested_count), r.status, r.reason[:60]
             )
         console.print(table)
 
