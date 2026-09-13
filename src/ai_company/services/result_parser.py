@@ -21,15 +21,33 @@ _JUDGE_VERDICTS = frozenset({"PASS", "REJECT", "HUMAN_ESCALATION"})
 _FINDING_SEVERITIES = frozenset({"critical", "high", "medium", "low", "info"})
 
 
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    """Parse a JSON object from raw text or from the last {...} embedded in prose."""
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        pass
+    matches = list(re.finditer(r"\{[\s\S]*\}", text))
+    for match in reversed(matches):
+        try:
+            data = json.loads(match.group(0))
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 def _coerce_dict(data: Any) -> dict[str, Any] | None:
     if isinstance(data, dict):
         return data
     if isinstance(data, str):
-        try:
-            inner = json.loads(data)
-        except json.JSONDecodeError:
-            return None
-        return inner if isinstance(inner, dict) else None
+        return _extract_json_object(data)
     return None
 
 
@@ -39,14 +57,20 @@ def _unwrap_agent_envelope(data: dict[str, Any]) -> dict[str, Any]:
 
       {"type":"result","subtype":"success","result":"<json-string-or-object>", ...}
 
-    Prefer the inner payload when present.
+    Real agents often put prose + JSON inside `result` (a string). Prefer the
+    innermost worker payload when present.
     """
-    if "status" in data or "verdict" in data:
-        return data
     if data.get("type") == "result" and "result" in data:
         inner = _coerce_dict(data["result"])
         if inner is not None:
             return inner
+        # Nested string that itself is an envelope
+        if isinstance(data["result"], str):
+            nested = _extract_json_object(data["result"])
+            if nested is not None:
+                return _unwrap_agent_envelope(nested) if nested.get("type") == "result" else nested
+    if "status" in data or "verdict" in data:
+        return data
     return data
 
 
@@ -54,23 +78,10 @@ def _try_load(text: str) -> dict[str, Any] | None:
     text = text.strip()
     if not text:
         return None
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            return _unwrap_agent_envelope(data)
-    except json.JSONDecodeError:
-        pass
-
-    # Agent may wrap JSON in prose; take the last {...} block.
-    matches = list(re.finditer(r"\{[\s\S]*\}", text))
-    for match in reversed(matches):
-        try:
-            data = json.loads(match.group(0))
-            if isinstance(data, dict):
-                return _unwrap_agent_envelope(data)
-        except json.JSONDecodeError:
-            continue
-    return None
+    data = _extract_json_object(text)
+    if data is None:
+        return None
+    return _unwrap_agent_envelope(data)
 
 
 def _normalize_finding(raw: Any) -> dict[str, Any] | None:

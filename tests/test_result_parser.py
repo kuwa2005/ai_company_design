@@ -65,6 +65,25 @@ def test_parse_cursor_agent_envelope() -> None:
     assert parsed.result["status"] == "completed"
 
 
+def test_parse_cursor_envelope_prose_plus_json() -> None:
+    """Real agent often puts Japanese prose then JSON inside envelope.result."""
+    envelope = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": (
+            "PRD草案の作成に着手します。人間レビュー可能なPRDを1文書として作成します。"
+            '{"status":"completed","changed_files":["docs/PRD.md"],'
+            '"tests":{"passed":0,"failed":0},"commit":null,"issues":[]}'
+        ),
+    }
+    parsed = parse_structured_result(json.dumps(envelope))
+    assert parsed.ok is True
+    assert parsed.result is not None
+    assert parsed.result["status"] == "completed"
+    assert parsed.result["changed_files"] == ["docs/PRD.md"]
+
+
 def test_parse_reviewer_verdict_only() -> None:
     raw = {
         "verdict": "FAIL",
