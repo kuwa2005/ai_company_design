@@ -91,11 +91,18 @@ def start_cmd(
     ),
     max_cycles: int = typer.Option(40, "--max-cycles", help="Autonomous cycle cap"),
     runner: str = typer.Option("mock", "--runner", help="mock | cursor when dispatching"),
+    quiet: bool = typer.Option(
+        False, "--quiet", help="Disable live progress lines on stderr"
+    ),
 ) -> None:
     """Secretary plans Tasks + Staffing Requests. Never spawns workers itself."""
     if runner not in {"mock", "cursor"}:
         raise typer.BadParameter("runner must be 'mock' or 'cursor'")
     ensure_runtime_ready()
+    from ai_company.services.progress import set_progress
+
+    if autonomous or dispatch:
+        set_progress(not quiet)
     with session_scope() as session:
         result = start_goal(session, goal)
         console.print(f"[green]Project[/green] {result.project.id}  {result.project.name}")
@@ -120,6 +127,11 @@ def start_cmd(
         if autonomous:
             from ai_company.services.autonomous import run_autonomous
 
+            console.print("")
+            console.print(
+                "[cyan]Autonomous running…[/cyan] live progress on stderr "
+                "(Ctrl+C to stop)"
+            )
             auto = run_autonomous(
                 session,
                 project_id=result.project.id,
@@ -240,9 +252,13 @@ def scheduler_run_once(
         "--runner",
         help="Worker runner: mock | cursor (always via Scheduler/Cost Guard)",
     ),
+    quiet: bool = typer.Option(False, "--quiet", help="Disable live progress lines"),
 ) -> None:
     if runner not in {"mock", "cursor"}:
         raise typer.BadParameter("runner must be 'mock' or 'cursor'")
+    from ai_company.services.progress import set_progress
+
+    set_progress(not quiet)
     with session_scope() as session:
         result = run_once(session, mock_succeed=not fail, runner=runner)  # type: ignore[arg-type]
         console.print(

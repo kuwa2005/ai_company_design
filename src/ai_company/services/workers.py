@@ -17,6 +17,7 @@ from ai_company.services import cost_governor as cg
 from ai_company.services.audit import record_audit
 from ai_company.services.cursor_runner import run_cursor_cli
 from ai_company.services.escalation import escalate_blocked_task
+from ai_company.services.progress import emit as progress
 from ai_company.services.result_parser import parse_for_kind
 from ai_company.services.validation import (
     finalize_judge,
@@ -443,6 +444,14 @@ def run_cursor_worker(
     stdout_path = out_dir / "stdout.txt"
     stderr_path = out_dir / "stderr.txt"
 
+    timeout = timeout_seconds
+    if timeout is None:
+        timeout = float(cfg.cursor_runner.timeout_minutes) * 60.0
+    progress(
+        f"CURSOR invoke  {task.id}  「{task.title}」  "
+        f"timeout={int(timeout)}s  workspace={cfg.cursor_runner.workspace or project_root()}"
+    )
+
     capture = run_cursor_cli(
         task,
         stdout_path=stdout_path,
@@ -466,6 +475,11 @@ def run_cursor_worker(
         and capture.exit_code == 0
         and parsed.ok
         and parsed.result is not None
+    )
+    progress(
+        f"CURSOR return  {task.id}  exit={capture.exit_code}  "
+        f"timed_out={capture.timed_out}  parse_ok={parsed.ok}  "
+        f"parse_error={parsed.error}"
     )
     result_json: dict[str, Any] = parsed.result or {
         "status": "failed",

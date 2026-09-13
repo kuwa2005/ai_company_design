@@ -13,6 +13,7 @@ from ai_company.enums import ProjectStatus, TaskKind, TaskStatus
 from ai_company.ids import new_id
 from ai_company.paths import executions_dir
 from ai_company.services.audit import record_audit
+from ai_company.services.progress import emit as progress
 from ai_company.services.scheduler import SchedulerResult, run_once
 from ai_company.services.secretary import exception_digest, human_summary
 from ai_company.services.staffing import auto_approve_open_requests
@@ -129,6 +130,34 @@ def create_release_candidate(
     return art
 
 
+def _progress_snapshot(session: Session, project_id: str) -> str:
+    counts = {s: 0 for s in (
+        TaskStatus.DONE,
+        TaskStatus.READY,
+        TaskStatus.WAITING,
+        TaskStatus.RUNNING,
+        TaskStatus.REVIEW_REQUIRED,
+        TaskStatus.BLOCKED,
+        TaskStatus.FAILED,
+    )}
+    rows = session.execute(
+        select(Task.status, func.count())
+        .where(Task.project_id == project_id)
+        .group_by(Task.status)
+    ).all()
+    for status, n in rows:
+        counts[str(status)] = int(n)
+    return (
+        f"DONE={counts.get(TaskStatus.DONE, 0)} "
+        f"READY={counts.get(TaskStatus.READY, 0)} "
+        f"WAITING={counts.get(TaskStatus.WAITING, 0)} "
+        f"RUNNING={counts.get(TaskStatus.RUNNING, 0)} "
+        f"REVIEW={counts.get(TaskStatus.REVIEW_REQUIRED, 0)} "
+        f"BLOCKED={counts.get(TaskStatus.BLOCKED, 0)} "
+        f"FAILED={counts.get(TaskStatus.FAILED, 0)}"
+    )
+
+
 def run_autonomous(
     session: Session,
     *,
@@ -150,6 +179,10 @@ def run_autonomous(
 
     result = AutonomousResult(project_status=project.status)
     auto_approve_open_requests(session, project_id=project_id, config=cfg)
+    progress(
+        f"AUTONOMOUS begin  project={project_id}  runner={runner}  "
+        f"max_cycles={max_cycles}  {_progress_snapshot(session, project_id)}"
+    )
 
     for cycle in range(1, max_cycles + 1):
         result.cycles = cycle
@@ -161,14 +194,19 @@ def run_autonomous(
             result.project_status = project.status
             result.stopped_reason = "all_implementation_done"
             result.summaries.append(human_summary(session, project_id=project_id))
+            progress(f"AUTONOMOUS complete  reason=all_implementation_done  rc={art.id}")
             break
 
         if _has_blocking_exception(session, project_id):
             result.project_status = project.status
             result.stopped_reason = "blocked_exception"
             result.summaries.append(exception_digest(session, project_id=project_id))
+            progress("AUTONOMOUS stop  reason=blocked_exception")
             break
 
+        progress(
+            f"CYCLE {cycle}/{max_cycles}  {_progress_snapshot(session, project_id)}"
+        )
         sched = run_once(
             session,
             config=cfg,
@@ -178,6 +216,11 @@ def run_autonomous(
         )
         result.last_scheduler = sched
         result.started_total += sched.started
+        progress(
+            f"CYCLE {cycle} summary  started={sched.started} denied={sched.denied} "
+            f"deferred={sched.deferred} throttled={sched.throttled}  "
+            f"{_progress_snapshot(session, project_id)}"
+        )
 
         if sched.started == 0 and _idle(session, project_id):
             if _project_complete(session, project_id):
@@ -186,8 +229,12 @@ def run_autonomous(
                 art = create_release_candidate(session, project=project)
                 result.release_candidate_id = art.id
                 result.stopped_reason = "all_implementation_done"
+                progress(
+                    f"AUTONOMOUS complete  reason=all_implementation_done  rc={art.id}"
+                )
             else:
                 result.stopped_reason = "idle_incomplete"
+                progress("AUTONOMOUS stop  reason=idle_incomplete")
             result.project_status = project.status
             result.summaries.append(human_summary(session, project_id=project_id))
             break
@@ -196,6 +243,7 @@ def run_autonomous(
             result.stopped_reason = "max_cycles"
             result.project_status = project.status
             result.summaries.append(exception_digest(session, project_id=project_id))
+            progress("AUTONOMOUS stop  reason=max_cycles")
     else:
         result.stopped_reason = result.stopped_reason or "max_cycles"
 

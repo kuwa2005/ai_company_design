@@ -13,6 +13,7 @@ from ai_company.enums import CostDecision
 from ai_company.services import cost_governor as cg
 from ai_company.services.audit import record_audit
 from ai_company.services.cleanup import run_cleanup
+from ai_company.services.progress import emit as progress
 from ai_company.services.staffing import (
     auto_approve_open_requests,
     note_staffing_hire,
@@ -231,7 +232,11 @@ def run_once(
                 "runner": runner,
             },
         )
-        dispatch_worker(
+        progress(
+            f"START {task.kind}/{task.role_required}  {task.id}  "
+            f"「{task.title}」  runner={runner}  worker={worker.id}"
+        )
+        execution = dispatch_worker(
             session,
             task=task,
             worker=worker,
@@ -239,6 +244,20 @@ def run_once(
             mock_succeed=mock_succeed,
             config=cfg,
             timeout_seconds=timeout_seconds,
+        )
+        session.refresh(task)
+        outcome = "OK" if execution.success else "FAIL"
+        extra = ""
+        if execution.result_json:
+            err = execution.result_json.get("parse_error")
+            if err:
+                extra = f"  parse_error={err}"
+            v = execution.result_json.get("verdict")
+            if v:
+                extra += f"  verdict={v}"
+        progress(
+            f"DONE  {outcome}  {task.id}  status={task.status}  "
+            f"exec={execution.id}{extra}"
         )
         release_lease(session, task)
         result.started += 1
@@ -259,6 +278,8 @@ def run_once(
                 "result": "STARTED",
                 "worker_id": worker.id,
                 "runner": runner,
+                "execution_id": execution.id,
+                "success": str(bool(execution.success)),
             }
         )
 
