@@ -212,6 +212,80 @@ def escalate_blocked_task(
     return _create_manager_replan(session, task=task, reason=reason, config=cfg)
 
 
+def pending_approval_task_ids(session: Session) -> set[str]:
+    from ai_company.services.secretary import _task_id_from_reason
+
+    ids: set[str] = set()
+    for a in session.scalars(
+        select(Approval).where(Approval.status == ApprovalStatus.PENDING)
+    ).all():
+        tid = _task_id_from_reason(a.reason or "")
+        if tid:
+            ids.add(tid)
+    return ids
+
+
+def list_orphaned_blocked(
+    session: Session, *, project_id: str | None = None
+) -> list[Task]:
+    """BLOCKED tasks with no PENDING human approval (stuck after reject/reconsider)."""
+    pending_ids = pending_approval_task_ids(session)
+    stmt = select(Task).where(Task.status == TaskStatus.BLOCKED)
+    if project_id:
+        stmt = stmt.where(Task.project_id == project_id)
+    return [t for t in session.scalars(stmt).all() if t.id not in pending_ids]
+
+
+def hand_to_manager(
+    session: Session,
+    *,
+    task: Task,
+    reason: str = "orphan_recover:hand_to_nearest_manager",
+    config: AppConfig | None = None,
+) -> Approval | Task:
+    """Explicitly give a stuck task to engineering_manager (not the president)."""
+    cfg = config or load_config()
+    return escalate_blocked_task(session, task=task, reason=reason, config=cfg)
+
+
+def recover_orphaned_blocked_to_manager(
+    session: Session,
+    *,
+    project_id: str | None = None,
+    config: AppConfig | None = None,
+) -> list[str]:
+    """
+    Auto-recover BLOCKED tasks that have no PENDING approval.
+
+    Typical case: human chose 「再度検討せよ」/却下, or legacy human-escalation
+    left the task blocked with an empty approval queue. Nearest manager takes over.
+    """
+    cfg = config or load_config()
+    recovered: list[str] = []
+    for task in list_orphaned_blocked(session, project_id=project_id):
+        # Prefer last known failure reason from rejected approval when present
+        last = session.scalar(
+            select(Approval)
+            .where(Approval.reason.contains(task.id))
+            .order_by(Approval.created_at.desc())
+            .limit(1)
+        )
+        base = "orphan_recover:blocked_without_pending"
+        if last and last.reason:
+            # strip resolution suffix
+            base_reason = last.reason.split(" | resolution:", 1)[0].strip()
+            reason = f"orphan_recover:{base_reason}"
+        else:
+            reason = base
+        hand_to_manager(session, task=task, reason=reason, config=cfg)
+        recovered.append(task.id)
+        progress(
+            f"孤児停止を回収  {task.id}「{task.title}」→ "
+            f"{format_role_label(MANAGER_ROLE)} へ移管（社長キュー空のため）"
+        )
+    return recovered
+
+
 def list_approvals(
     session: Session, *, status: str | None = None, limit: int = 50
 ) -> list[Approval]:

@@ -315,6 +315,42 @@ def task_list(
         console.print(table)
 
 
+@task_app.command("handoff-manager")
+def task_handoff_manager(
+    task_id: str = typer.Argument(..., help="BLOCKED など停止中のタスク ID"),
+    runner: str = typer.Option("cursor", "--runner"),
+) -> None:
+    """Give a stuck task to engineering_manager (nearest supervisor), not the president."""
+    from ai_company.db.models import Task
+    from ai_company.services.escalation import hand_to_manager
+    from ai_company.roles import format_role_label
+
+    with session_scope() as session:
+        task = session.get(Task, task_id)
+        if task is None:
+            raise typer.BadParameter(f"Task not found: {task_id}")
+        result = hand_to_manager(
+            session,
+            task=task,
+            reason="manual_handoff:nearest_manager",
+        )
+        if hasattr(result, "status") and getattr(result, "action", None):
+            console.print(
+                f"[yellow]社長承認が必要[/yellow] {result.id} "
+                f"（マネージャー経路を使い切り）"
+            )
+        else:
+            console.print(
+                f"[green]移管[/green] {task_id} → "
+                f"{format_role_label('engineering_manager')}  "
+                f"再計画={result.id}"
+            )
+        console.print("")
+        console.print(
+            human_next_actions(session, runner=runner, stopped_reason="scheduler_pause")
+        )
+
+
 @scheduler_app.command("run-once")
 def scheduler_run_once(
     fail: bool = typer.Option(False, "--fail", help="Force mock worker failure"),

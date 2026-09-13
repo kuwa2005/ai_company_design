@@ -45,10 +45,9 @@ def test_human_next_actions_blocked_without_pending_is_not_urgent(
     task.status = TaskStatus.BLOCKED
     db_session.flush()
     text = human_next_actions(db_session, project_id=task.project_id)
-    assert "急いで打つコマンドはありません" in text
-    assert "必須作業ではありません" in text
-    assert "ai-company debug stuck" in text
-    assert f"ai-company debug task {task.id}" in text
+    assert "実装マネージャー" in text or "handoff-manager" in text
+    assert "scheduler continue" in text
+    assert f"handoff-manager {task.id}" in text
 
 
 def test_human_next_actions_throttle_points_to_continue(

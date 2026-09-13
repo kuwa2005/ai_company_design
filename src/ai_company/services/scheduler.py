@@ -83,6 +83,11 @@ def run_once(
     result.zombies_killed = cleanup.zombies_killed
     auto_approve_open_requests(session, config=cfg)
     cg.revive_deferred_budget_tasks(session, config=cfg)
+    from ai_company.services.escalation import recover_orphaned_blocked_to_manager
+
+    recovered = recover_orphaned_blocked_to_manager(session, config=cfg)
+    if recovered:
+        progress(f"孤児停止をマネージャーへ移管: {len(recovered)} 件")
 
     slots_budget = max_to_start
     if slots_budget is None:

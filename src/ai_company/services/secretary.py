@@ -550,10 +550,22 @@ def responsibility_digest(session: Session, *, project_id: str | None = None) ->
             )
 
     for t in _scoped(TaskStatus.BLOCKED):
-        lines.append(
-            f"- 停止「{t.title}」→ {format_role_label('human_owner')} の最終判断待ち "
-            f"（{t.id}）"
+        has_pending = any(
+            t.id in (a.reason or "")
+            for a in session.scalars(
+                select(Approval).where(Approval.status == "PENDING").limit(20)
+            ).all()
         )
+        if has_pending:
+            lines.append(
+                f"- 停止「{t.title}」→ {format_role_label('human_owner')} の最終判断待ち "
+                f"（{t.id}）"
+            )
+        else:
+            lines.append(
+                f"- 停止「{t.title}」→ 承認キュー空の孤児停止 "
+                f"（次は {format_role_label('engineering_manager')} へ自動移管可 / {t.id}）"
+            )
 
     pending = list(
         session.scalars(
@@ -704,7 +716,21 @@ def human_next_actions(
             if matched:
                 lines.append(f"  原因: {_explain_block_reason(matched.reason)}")
             else:
-                lines.append("  原因: 再試行上限または判定により停止（詳細は承認一覧を確認）")
+                last = session.scalar(
+                    select(Approval)
+                    .where(Approval.reason.contains(t.id))
+                    .order_by(Approval.created_at.desc())
+                    .limit(1)
+                )
+                if last:
+                    lines.append(f"  原因: {_explain_block_reason(last.reason)}")
+                    lines.append(
+                        f"  状態: 承認キュー空 → 実装マネージャーへ移管可"
+                    )
+                else:
+                    lines.append(
+                        "  原因: 停止中（承認なし）。実装マネージャーへ移管可"
+                    )
     if deferred:
         lines.append("")
         lines.append("【予算待ち】")
@@ -760,23 +786,22 @@ def human_next_actions(
         return "\n".join(lines)
 
     if blocked and not pending:
-        lines.append("いま人が急いで打つコマンドはありません。")
         lines.append(
-            "停止タスクは残っていますが、承認キューは空です"
-            "（すでに「いいえ／再度検討せよ」済み、または承認が作られていない状態）。"
+            "停止タスクがありますが、社長向け承認キューは空です"
+            "（「再度検討／却下」済み、または旧ルートの孤児停止）。"
         )
         lines.append("")
-        lines.append("意味:")
-        lines.append("- 機械は自動では進めません（意図どおりの停止）")
-        lines.append("- `validation status` は任意の調査用であり、必須作業ではありません")
+        lines.append("いまやることは、直近上司（実装マネージャー）に戻すことです。")
+        lines.append("一度だけ次を実行すれば、マネージャー再計画→修正が自動で続きます:")
         lines.append("")
-        lines.append("人がやるなら次のいずれかです（任意）:")
-        lines.append("- 方針を決めてから、再実行したいタスクを承認し直す／作り直す")
-        lines.append("- この停止のまま後続を進めない（依存待ちはそのまま残る）")
+        lines.append(f"   ai-company scheduler continue --runner {runner}")
         lines.append("")
-        lines.append("開発中の調査用:")
+        lines.append("個別に戻すなら:")
+        for t in blocked:
+            lines.append(f"   ai-company task handoff-manager {t.id}")
+        lines.append("")
+        lines.append("調査だけするなら:")
         lines.append("   ai-company status --debug")
-        lines.append("   ai-company debug stuck")
         for t in blocked:
             lines.append(f"   ai-company debug task {t.id}")
         return "\n".join(lines)

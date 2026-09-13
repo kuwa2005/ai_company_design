@@ -205,11 +205,16 @@ def continue_until_gate(
     cfg = config or load_config()
     result = AutonomousResult()
     auto_approve_open_requests(session, project_id=project_id, config=cfg)
+    from ai_company.services.escalation import recover_orphaned_blocked_to_manager
     from ai_company.ui_ja import runner_ja
 
+    recovered = recover_orphaned_blocked_to_manager(
+        session, project_id=project_id, config=cfg
+    )
     progress(
         f"継続実行を開始  実行方式={runner_ja(runner)}  最大サイクル={max_cycles}"
         + (f"  案件={project_id}" if project_id else "")
+        + (f"  孤児回収={len(recovered)}" if recovered else "")
     )
 
     for cycle in range(1, max_cycles + 1):
