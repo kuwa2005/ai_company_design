@@ -480,6 +480,9 @@ def human_summary(session: Session, *, project_id: str | None = None) -> str:
         "",
         "例外:",
         exception_digest(session, project_id=project.id if project else None),
+        "",
+        "対応状況（誰が扱っているか）:",
+        responsibility_digest(session, project_id=project.id if project else None),
     ]
     if decisions:
         lines.append("リスク: 停止／予算待ちタスクがあります。判断または再実行が必要です。")
@@ -487,6 +490,84 @@ def human_summary(session: Session, *, project_id: str | None = None) -> str:
         lines.append("リスク: いま目立った問題はありません。")
     lines.append("注: 秘書はワーカーを直接起動しません。スケジューラ／自動実行で進めます。")
     lines.append("注: 実装の自己申告だけでは完了になりません。独立検証ゲートが必要です。")
+    return "\n".join(lines)
+
+
+def responsibility_digest(session: Session, *, project_id: str | None = None) -> str:
+    """Show which role currently owns open work / failures."""
+    from ai_company.db.models import Approval
+    from ai_company.roles import format_role_label
+
+    lines: list[str] = []
+
+    def _scoped(*statuses: str) -> list[Task]:
+        stmt = select(Task).where(Task.status.in_(statuses)).order_by(Task.priority.desc())
+        if project_id:
+            stmt = stmt.where(Task.project_id == project_id)
+        return list(session.scalars(stmt.limit(12)).all())
+
+    for t in _scoped(TaskStatus.RUNNING, TaskStatus.READY):
+        if t.kind == "replan":
+            lines.append(
+                f"- {format_role_label(t.role_required or 'engineering_manager')} が再計画中: "
+                f"{t.id}「{t.title}」（親={t.parent_task_id}）"
+            )
+        elif t.kind == "repair":
+            lines.append(
+                f"- {format_role_label(t.role_required or 'coding_worker')} が修正中: "
+                f"{t.id}「{t.title}」（親={t.parent_task_id}）"
+            )
+        elif t.kind in {"validation", "judge"}:
+            lines.append(
+                f"- {format_role_label(t.role_required or t.kind)} が検証/判定: "
+                f"{t.id}「{t.title}」"
+            )
+        elif t.status == TaskStatus.RUNNING:
+            lines.append(
+                f"- {format_role_label(t.role_required or 'coding_worker')} が実行中: "
+                f"{t.id}「{t.title}」"
+            )
+
+    for t in _scoped(TaskStatus.FAILED):
+        replan = session.scalar(
+            select(Task)
+            .where(
+                Task.parent_task_id == t.id,
+                Task.kind.in_(("replan",)),
+                Task.status.in_((TaskStatus.READY, TaskStatus.RUNNING, TaskStatus.WAITING)),
+            )
+            .limit(1)
+        )
+        if replan:
+            lines.append(
+                f"- 失敗「{t.title}」→ 直近上司 "
+                f"{format_role_label('engineering_manager')} が対応予定 "
+                f"（{replan.id}）"
+            )
+        else:
+            lines.append(
+                f"- 失敗「{t.title}」({t.id}) 担当={format_role_label(t.role_required or 'coding_worker')}"
+            )
+
+    for t in _scoped(TaskStatus.BLOCKED):
+        lines.append(
+            f"- 停止「{t.title}」→ {format_role_label('human_owner')} の最終判断待ち "
+            f"（{t.id}）"
+        )
+
+    pending = list(
+        session.scalars(
+            select(Approval).where(Approval.status == "PENDING").limit(10)
+        ).all()
+    )
+    for a in pending:
+        lines.append(
+            f"- 承認 {a.id}: {format_role_label('human_owner')} 向け "
+            f"（{_explain_block_reason(a.reason)[:80]}）"
+        )
+
+    if not lines:
+        return "  （開いている役割対応はありません）"
     return "\n".join(lines)
 
 
@@ -531,6 +612,12 @@ def _explain_block_reason(reason: str) -> str:
     r = reason or ""
     task_id = _task_id_from_reason(r)
     suffix = f"（タスク: {task_id}）" if task_id else ""
+    if "manager_exhausted" in r:
+        return (
+            "直近の上司（実装マネージャー）の再計画回数も使い切ったため、"
+            "社長（人間）の判断が必要です。"
+            + suffix
+        )
     if "judge_reject" in r and "review_fail:test" in r:
         return (
             "独立テスト検証が FAIL し、判定（Judge）が REJECT しました。"
@@ -548,7 +635,11 @@ def _explain_block_reason(reason: str) -> str:
     if "retries_exhausted" in r:
         return "ワーカー実行の失敗が続き、再試行上限に達したため停止しました。" + suffix
     if "repair_loop_max_cycles" in r:
-        return "修正ループの回数上限に達したため、自動続行を止めました。" + suffix
+        return (
+            "末端の修正ループ上限に達しました。"
+            "通常は直近の上司（実装マネージャー）が再計画します。"
+            + suffix
+        )
     return f"システムが人間判断を要求しています（詳細: {r[:160]}）。" + suffix
 
 

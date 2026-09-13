@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ai_company.config import AppConfig, load_config
 from ai_company.db.models import Execution, Task, Worker
-from ai_company.enums import ReviewVerdict, TaskStatus, WorkerStatus
+from ai_company.enums import ReviewVerdict, TaskKind, TaskStatus, WorkerStatus
 from ai_company.ids import new_id
 from ai_company.paths import executions_dir, project_root
 from ai_company.services import cost_governor as cg
@@ -19,6 +19,8 @@ from ai_company.services.cursor_runner import run_cursor_cli
 from ai_company.services.escalation import escalate_blocked_task
 from ai_company.services.progress import emit as progress
 from ai_company.services.result_parser import parse_for_kind
+from ai_company.services.tasks import create_task
+from ai_company.ui_ja import role_ja
 from ai_company.services.validation import (
     finalize_judge,
     is_implementation_task,
@@ -191,8 +193,71 @@ def _finalize_execution(
             refresh_dependents(session, task.id)
             return execution
 
-        # Implementation / repair: NEVER self-DONE when validation enabled
+        # Implementation / repair / manager replan
         if is_implementation_task(task):
+            if task.kind in {"replan", TaskKind.REPLAN}:
+                # Supervisor decided next steps → spawn a coding repair with guidance
+                task.status = TaskStatus.DONE
+                session.flush()
+                record_audit(
+                    session,
+                    event_type="task_completed",
+                    actor_type="worker",
+                    actor_id=worker.id,
+                    target_type="task",
+                    target_id=task.id,
+                    metadata={"execution_id": execution.id, "kind": "replan"},
+                )
+                parent = (
+                    session.get(Task, task.parent_task_id) if task.parent_task_id else None
+                )
+                if parent is not None:
+                    payload = execution.result_json or {}
+                    guidance = (
+                        str(payload.get("summary") or payload.get("reason") or "")
+                        or str(payload.get("objective") or "")
+                        or f"Manager replan after: {task.objective}"
+                    )
+                    parent.retry_count = 0
+                    repair = create_task(
+                        session,
+                        title=f"Repair: {parent.title}",
+                        priority=min(100, parent.priority + 5),
+                        project_id=parent.project_id,
+                        objective=(
+                            f"Follow engineering_manager guidance.\n{guidance}"
+                        ),
+                        role_required=parent.role_required or "coding_worker",
+                        estimated_cost=parent.estimated_cost,
+                        parent_task_id=parent.id,
+                        kind=TaskKind.REPAIR,
+                        risk_level=parent.risk_level,
+                        config=cfg,
+                    )
+                    parent.status = TaskStatus.FAILED
+                    session.flush()
+                    record_audit(
+                        session,
+                        event_type="repair_task_created",
+                        actor_type="worker",
+                        actor_id=worker.id,
+                        target_type="task",
+                        target_id=repair.id,
+                        metadata={
+                            "parent": parent.id,
+                            "via": "manager_replan",
+                            "replan_id": task.id,
+                            "handler_role": "engineering_manager",
+                            "executor_role": parent.role_required or "coding_worker",
+                        },
+                    )
+                    progress(
+                        f"上司対応完了  実装マネージャーが方針決定 → "
+                        f"{role_ja(parent.role_required or 'coding_worker')} へ修正指示  "
+                        f"修正={repair.id}  親={parent.id}"
+                    )
+                return execution
+
             if task.kind == "repair":
                 # Repair completion closes the repair task and opens a NEW validation plan
                 # on the original parent — never reuse old ValidationResults for PASS.
@@ -284,12 +349,11 @@ def _finalize_execution(
             metadata={"reason": "timeout", "retry_count": task.retry_count},
         )
     if task.retry_count > task.max_retries:
-        task.status = TaskStatus.BLOCKED
-        session.flush()
         escalate_blocked_task(
             session,
             task=task,
             reason=f"retries_exhausted:{task.retry_count}/{task.max_retries}",
+            config=cfg,
         )
     else:
         if not timed_out:

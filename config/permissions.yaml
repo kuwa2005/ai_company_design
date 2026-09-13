@@ -13,6 +13,14 @@ profiles:
       - code.commit
       - test.execute
       - shell.safe
+
+  engineering_manager:
+    permissions:
+      - code.read
+      - task.create
+      - task.prioritize
+      - staffing.request
+      - validation.read
   reviewer:
     permissions:
       - code.read

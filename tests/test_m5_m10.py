@@ -69,11 +69,11 @@ def test_m7_specialist_roles_from_risk(db_session: Session, tmp_env: Path) -> No
     assert "architecture_reviewer" in roles
 
 
-def test_m8_repair_loop_max_cycles_escalates(
+def test_m8_repair_loop_max_cycles_escalates_to_manager(
     db_session: Session, tmp_env: Path
 ) -> None:
     write_validation_override(
-        tmp_env, repair_loop={"max_cycles": 1, "max_total_worker_runs": 12}
+        tmp_env, repair_loop={"max_cycles": 1, "max_total_worker_runs": 12, "manager_max_replans": 2}
     )
     clear_config_cache()
     from ai_company.config import load_config
@@ -128,10 +128,16 @@ def test_m8_repair_loop_max_cycles_escalates(
     assert judge is not None
     finalize_judge(db_session, judge_task=judge)
     db_session.refresh(parent)
-    assert parent.status == TaskStatus.BLOCKED
+    # Nearest supervisor owns it — not human BLOCKED yet
+    assert parent.status == TaskStatus.FAILED
     decisions = list(db_session.scalars(select(JudgeDecision)).all())
-    assert decisions[-1].verdict == "HUMAN_ESCALATION"
+    assert decisions[-1].verdict == "REJECT"
     assert any("repair_loop_max_cycles" in str(r) for r in (decisions[-1].reasons or []))
+    replan = db_session.scalar(
+        select(Task).where(Task.parent_task_id == parent.id, Task.kind == "replan")
+    )
+    assert replan is not None
+    assert replan.role_required == "engineering_manager"
 
 
 def test_m9_staffing_approve_and_on_demand(

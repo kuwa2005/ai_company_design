@@ -81,7 +81,7 @@ def describe_approval_prompt(approval: Approval, *, task: Task | None = None) ->
     lines.extend(
         [
             "",
-            "この停止は、自動の修正回数上限に達したあとの人間判断です。",
+            "この停止は、直近の上司（AIマネージャー）でも解決できなかったあとの人間判断です。",
             "質問: このまま自動修正を続けてよいですか？",
             "",
             "  1) はい          … 続行を承認し、タスクを再キューします",

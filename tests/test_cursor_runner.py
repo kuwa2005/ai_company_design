@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ai_company.db.models import AuditEvent, Execution, Worker
+from ai_company.db.models import AuditEvent, Execution, Task, Worker
 from ai_company.enums import TaskStatus, WorkerStatus
 from ai_company.services.cursor_runner import build_cursor_command
 from ai_company.services.scheduler import run_once
@@ -96,8 +96,12 @@ def test_cursor_runner_broken_json_not_success(
         run_once(db_session, runner="cursor")
 
     db_session.refresh(task)
-    # max_retries=0 => first failure blocks (retry_count 1 > 0)
-    assert task.status == TaskStatus.BLOCKED
+    # max_retries=0 => escalate to nearest manager (not human yet)
+    assert task.status == TaskStatus.FAILED
+    replan = db_session.scalar(
+        select(Task).where(Task.parent_task_id == task.id, Task.kind == "replan")
+    )
+    assert replan is not None
     executions = list(db_session.scalars(select(Execution)).all())
     assert executions[0].success is False
 

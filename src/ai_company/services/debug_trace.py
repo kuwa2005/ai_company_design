@@ -156,6 +156,9 @@ def task_trace(session: Session, task_id: str, *, audit_limit: int = 12) -> str:
 
 def stuck_trace(session: Session, *, project_id: str | None = None) -> str:
     """Dump investigation info for BLOCKED / PENDING / empty-approval cases."""
+    from ai_company.roles import format_role_label, org_chart_text
+    from ai_company.services.secretary import responsibility_digest
+
     lines = ["【デバッグ／スタック調査】"]
     paths = runtime_paths()
     lines.append(f"runtime cwd={paths['cwd']}")
@@ -166,6 +169,10 @@ def stuck_trace(session: Session, *, project_id: str | None = None) -> str:
             f"注意: AI_COMPANY_DATA_DIR={paths['AI_COMPANY_DATA_DIR']} "
             "が有効なので、cwd/.ai_company とは別 DB の可能性があります"
         )
+
+    lines.append("")
+    lines.append(responsibility_digest(session, project_id=project_id))
+    lines.append("")
 
     stmt = select(Task).where(Task.status == TaskStatus.BLOCKED)
     if project_id:
@@ -184,12 +191,36 @@ def stuck_trace(session: Session, *, project_id: str | None = None) -> str:
     lines.append(f"BLOCKED={len(blocked)} PENDING_APPROVAL={len(pending)}")
     for a in pending:
         tid = _task_id_from_reason(a.reason)
-        lines.append(f"- pending {a.id} task={tid} :: {_explain_block_reason(a.reason)[:140]}")
+        lines.append(
+            f"- pending {a.id} handler={format_role_label('human_owner')} "
+            f"task={tid} :: {_explain_block_reason(a.reason)[:140]}"
+        )
 
     for t in blocked:
         lines.append("")
         lines.append(task_trace(session, t.id, audit_limit=8))
 
-    if not blocked and not pending:
-        lines.append("（停止タスクも未承認もなし）")
+    failed = list(
+        session.scalars(
+            select(Task)
+            .where(Task.status == TaskStatus.FAILED)
+            .limit(10)
+        ).all()
+    )
+    for t in failed:
+        lines.append("")
+        lines.append(
+            f"FAILED {t.id}「{t.title}」 role={format_role_label(t.role_required or '')}"
+        )
+        lines.append(task_trace(session, t.id, audit_limit=5))
+
+    if not blocked and not pending and not failed:
+        lines.append("（停止タスクも未承認も失敗中もなし）")
+
+    lines.append("")
+    lines.append("--- ロール定義（抜粋）---")
+    # Keep org chart available but truncated in stuck dump
+    chart = org_chart_text().splitlines()
+    lines.extend(chart[:12])
+    lines.append("（全文: ai-company roles）")
     return "\n".join(lines)

@@ -136,6 +136,9 @@ class JudgeSection(BaseModel):
 class RepairLoopSection(BaseModel):
     max_cycles: int = 3
     max_total_worker_runs: int = 12
+    # After coding repair cycles are exhausted, engineering_manager may replan
+    # this many times before escalating to the human owner.
+    manager_max_replans: int = 2
 
 
 class ValidationFile(BaseModel):

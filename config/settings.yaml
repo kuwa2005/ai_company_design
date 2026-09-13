@@ -23,6 +23,7 @@ staffing:
     coding_worker: 4
     backend_engineer: 3
     frontend_engineer: 2
+    engineering_manager: 2
     reviewer: 4
     judge: 2
     test_reviewer: 2

@@ -24,6 +24,7 @@ class TaskKind(StrEnum):
     VALIDATION = "validation"
     JUDGE = "judge"
     REPAIR = "repair"
+    REPLAN = "replan"
 
 
 class WorkerStatus(StrEnum):

@@ -38,3 +38,4 @@ judge:
 repair_loop:
   max_cycles: 3
   max_total_worker_runs: 12
+  manager_max_replans: 2

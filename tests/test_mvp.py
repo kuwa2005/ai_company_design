@@ -146,7 +146,8 @@ def test_soft_budget_throttle_reduces_capacity(db_session: Session, tmp_env: Pat
     assert result.started == 1
 
 
-def test_retry_then_blocked(db_session: Session, tmp_env: Path) -> None:
+def test_retry_then_manager_replan(db_session: Session, tmp_env: Path) -> None:
+    """Worker retries exhausted → nearest engineering_manager, not human."""
     write_settings_override(
         tmp_env,
         retry={"default_max_retries": 1},
@@ -155,18 +156,43 @@ def test_retry_then_blocked(db_session: Session, tmp_env: Path) -> None:
     clear_config_cache()
     task = create_task(db_session, title="flaky", priority=50, max_retries=1)
 
-    # fail until blocked: retry_count goes 1 then 2 > max_retries 1
     r1 = run_once(db_session, mock_succeed=False)
     assert r1.started == 1
     db_session.refresh(task)
     assert task.status == TaskStatus.READY
     assert task.retry_count == 1
 
-    r2 = run_once(db_session, mock_succeed=False)
+    r2 = run_once(db_session, mock_succeed=False, max_to_start=1)
     assert r2.started == 1
     db_session.refresh(task)
-    assert task.status == TaskStatus.BLOCKED
+    assert task.status == TaskStatus.FAILED
     assert task.retry_count == 2
+
+    from ai_company.db.models import Approval
+
+    replans = list(
+        db_session.scalars(
+            select(Task).where(Task.parent_task_id == task.id, Task.kind == "replan")
+        ).all()
+    )
+    assert len(replans) == 1
+    assert replans[0].role_required == "engineering_manager"
+    assert list(db_session.scalars(select(Approval)).all()) == []
+
+
+def test_manager_exhausted_then_human(db_session: Session, tmp_env: Path) -> None:
+    """When manager replan budget is 0, failure goes to human president."""
+    write_settings_override(tmp_env, retry={"default_max_retries": 0})
+    write_validation_override(
+        tmp_env,
+        validation={"enabled": False},
+        repair_loop={"max_cycles": 3, "manager_max_replans": 0},
+    )
+    clear_config_cache()
+    task = create_task(db_session, title="hopeless", priority=50, max_retries=0)
+    run_once(db_session, mock_succeed=False, max_to_start=1)
+    db_session.refresh(task)
+    assert task.status == TaskStatus.BLOCKED
 
     from ai_company.db.models import Approval
     from ai_company.enums import ApprovalStatus
@@ -174,6 +200,7 @@ def test_retry_then_blocked(db_session: Session, tmp_env: Path) -> None:
     approvals = list(db_session.scalars(select(Approval)).all())
     assert len(approvals) == 1
     assert approvals[0].status == ApprovalStatus.PENDING
+    assert "manager_exhausted" in approvals[0].reason
 
 
 def test_circuit_breaker(db_session: Session, tmp_env: Path) -> None:

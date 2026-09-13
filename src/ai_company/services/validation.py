@@ -31,7 +31,18 @@ VALIDATION_ROLES = set(REVIEW_TYPE_TO_ROLE.values()) | {"reviewer", "qa", "qa_wo
 
 
 def is_implementation_task(task: Task) -> bool:
-    return task.kind in {TaskKind.IMPLEMENTATION, TaskKind.REPAIR, "implementation", "repair"}
+    return task.kind in {
+        TaskKind.IMPLEMENTATION,
+        TaskKind.REPAIR,
+        TaskKind.REPLAN,
+        "implementation",
+        "repair",
+        "replan",
+    }
+
+
+def is_replan_task(task: Task) -> bool:
+    return task.kind in {TaskKind.REPLAN, "replan"}
 
 
 def is_validation_task(task: Task) -> bool:
@@ -375,17 +386,15 @@ def finalize_judge(
         session, plan=plan, config=cfg
     )
 
-    # Infinite-loop guard: too many repair cycles → escalate
+    # Repair-loop guard: too many coding repairs → nearest manager (not human yet)
     parent_preview = session.get(Task, plan.task_id)
-    if (
+    repair_exhausted = (
         verdict == JudgeVerdict.REJECT
         and parent_preview is not None
         and count_repair_cycles(session, parent_preview.id) >= cfg.repair_loop.max_cycles
-    ):
-        verdict = JudgeVerdict.HUMAN_ESCALATION
-        reasons = reasons + [
-            f"repair_loop_max_cycles:{cfg.repair_loop.max_cycles}"
-        ]
+    )
+    if repair_exhausted:
+        reasons = reasons + [f"repair_loop_max_cycles:{cfg.repair_loop.max_cycles}"]
 
     # Optional AI judge proposal from execution (advisory only)
     ai_proposal = None
@@ -444,44 +453,56 @@ def finalize_judge(
         )
         refresh_dependents(session, parent.id)
     elif verdict == JudgeVerdict.REJECT:
-        parent.retry_count += 1
-        if parent.retry_count > parent.max_retries:
-            parent.status = TaskStatus.BLOCKED
-            session.flush()
+        if repair_exhausted:
+            # Coding repair budget used up → escalate to engineering_manager
             escalate_blocked_task(
-                session, task=parent, reason=f"judge_reject:{','.join(reasons)}"
-            )
-        else:
-            repair = create_task(
                 session,
-                title=f"Repair: {parent.title}",
-                priority=parent.priority + 5,
-                project_id=parent.project_id,
-                objective=f"Repair after judge REJECT: {reasons}",
-                role_required="coding_worker",
-                estimated_cost=parent.estimated_cost,
-                parent_task_id=parent.id,
-                kind=TaskKind.REPAIR,
-                risk_level=parent.risk_level,
+                task=parent,
+                reason=f"judge_reject:{','.join(reasons)}",
                 config=cfg,
             )
-            decision.repair_tasks = [repair.id]
-            parent.status = TaskStatus.FAILED
-            session.flush()
-            record_audit(
-                session,
-                event_type="repair_task_created",
-                actor_type="system",
-                actor_id="judge",
-                target_type="task",
-                target_id=repair.id,
-                metadata={"parent": parent.id, "reasons": reasons},
-            )
+        else:
+            parent.retry_count += 1
+            if parent.retry_count > parent.max_retries:
+                escalate_blocked_task(
+                    session,
+                    task=parent,
+                    reason=f"judge_reject:{','.join(reasons)}",
+                    config=cfg,
+                )
+            else:
+                repair = create_task(
+                    session,
+                    title=f"Repair: {parent.title}",
+                    priority=parent.priority + 5,
+                    project_id=parent.project_id,
+                    objective=f"Repair after judge REJECT: {reasons}",
+                    role_required="coding_worker",
+                    estimated_cost=parent.estimated_cost,
+                    parent_task_id=parent.id,
+                    kind=TaskKind.REPAIR,
+                    risk_level=parent.risk_level,
+                    config=cfg,
+                )
+                decision.repair_tasks = [repair.id]
+                parent.status = TaskStatus.FAILED
+                session.flush()
+                record_audit(
+                    session,
+                    event_type="repair_task_created",
+                    actor_type="system",
+                    actor_id="judge",
+                    target_type="task",
+                    target_id=repair.id,
+                    metadata={"parent": parent.id, "reasons": reasons},
+                )
     else:
-        parent.status = TaskStatus.BLOCKED
-        session.flush()
+        # HUMAN_ESCALATION (e.g. UNCERTAIN) → nearest manager first
         escalate_blocked_task(
-            session, task=parent, reason=f"judge_human_escalation:{','.join(reasons)}"
+            session,
+            task=parent,
+            reason=f"judge_human_escalation:{','.join(reasons)}",
+            config=cfg,
         )
     return verdict
 

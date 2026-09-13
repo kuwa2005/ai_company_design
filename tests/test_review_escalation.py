@@ -52,10 +52,31 @@ def test_validation_fail_triggers_judge_reject(
     assert repairs or parent.status == TaskStatus.BLOCKED
 
 
-def test_blocked_escalation_and_approval_requeue(
+def test_blocked_escalation_goes_to_manager_first(
     db_session: Session, tmp_env: Path
 ) -> None:
     write_validation_override(tmp_env, validation={"enabled": False})
+    clear_config_cache()
+    task = create_task(db_session, title="hopeless", priority=50, max_retries=0)
+    run_once(db_session, mock_succeed=False, max_to_start=1)
+    db_session.refresh(task)
+    assert task.status == TaskStatus.FAILED
+    replan = db_session.scalar(
+        select(Task).where(Task.parent_task_id == task.id, Task.kind == "replan")
+    )
+    assert replan is not None
+    assert replan.role_required == "engineering_manager"
+    assert db_session.scalar(select(Approval)) is None
+
+
+def test_human_approval_requeue_after_manager_exhausted(
+    db_session: Session, tmp_env: Path
+) -> None:
+    write_validation_override(
+        tmp_env,
+        validation={"enabled": False},
+        repair_loop={"manager_max_replans": 0},
+    )
     clear_config_cache()
     task = create_task(db_session, title="hopeless", priority=50, max_retries=0)
     run_once(db_session, mock_succeed=False, max_to_start=1)

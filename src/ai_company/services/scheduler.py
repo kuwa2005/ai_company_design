@@ -239,6 +239,11 @@ def run_once(
         progress(
             f"開始  {kind_ja(task.kind)}/{role_ja(task.role_required)}  {task.id}  "
             f"「{task.title}」  方式={runner_ja(runner)}  ワーカー={worker.id}"
+            + (
+                f"  親={task.parent_task_id}"
+                if task.parent_task_id and task.kind in {"repair", "replan", "validation", "judge"}
+                else ""
+            )
         )
         execution = dispatch_worker(
             session,

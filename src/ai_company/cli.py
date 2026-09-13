@@ -36,6 +36,7 @@ from ai_company.services.debug_trace import (
     stuck_trace,
     task_trace,
 )
+from ai_company.roles import org_chart_text
 
 app = typer.Typer(
     name="ai-company",
@@ -225,6 +226,12 @@ def debug_task_cmd(
     """Dump validation / judge / approval / audit trace for one task."""
     with session_scope() as session:
         console.print(task_trace(session, task_id))
+
+
+@app.command("roles")
+def roles_cmd() -> None:
+    """Show AI employee roles, layers, and who reports to whom."""
+    console.print(org_chart_text())
 
 
 @app.command("ask")

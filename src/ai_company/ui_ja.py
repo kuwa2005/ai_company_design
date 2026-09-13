@@ -22,12 +22,14 @@ KIND_JA = {
     "validation": "検証",
     "judge": "判定",
     "repair": "修正",
+    "replan": "上司再計画",
 }
 
 ROLE_JA = {
     "coding_worker": "実装",
     "backend_engineer": "バックエンド",
     "frontend_engineer": "フロントエンド",
+    "engineering_manager": "実装マネージャー",
     "reviewer": "レビュー",
     "test_reviewer": "テスト検証",
     "spec_reviewer": "仕様検証",
