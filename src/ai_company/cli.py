@@ -16,6 +16,10 @@ from ai_company.services.audit import list_audit_events
 from ai_company.services.cleanup import run_cleanup
 from ai_company.services.cost_governor import get_budget_snapshot
 from ai_company.services.escalation import list_approvals, resolve_approval
+from ai_company.services.approval_flow import (
+    run_interactive_approval_session,
+    should_run_interactive,
+)
 from ai_company.services.scheduler import run_once
 from ai_company.services.secretary import (
     answer_question,
@@ -480,9 +484,19 @@ def staffing_reject(
 @approval_app.command("list")
 def approval_list(
     status: Optional[str] = typer.Option(None, "--status"),
+    interactive: Optional[bool] = typer.Option(
+        None,
+        "--interactive/--no-interactive",
+        help="未承認を対話形式で処理（TTY + PENDING のとき既定で ON）",
+    ),
+    runner: str = typer.Option("cursor", "--runner", help="解決後の案内に出す runner"),
 ) -> None:
     with session_scope() as session:
         rows = list_approvals(session, status=status)
+        if should_run_interactive(status=status, row_count=len(rows), interactive=interactive):
+            run_interactive_approval_session(session, rows, runner=runner, console=console)
+            return
+
         table = Table(title="Approvals")
         table.add_column("ID")
         table.add_column("Action")
@@ -491,6 +505,11 @@ def approval_list(
         for r in rows:
             table.add_row(r.id, r.action, r.status, r.reason[:80])
         console.print(table)
+        if (status or "").upper() == "PENDING" and rows:
+            console.print("")
+            console.print(
+                "[dim]対話形式で処理する: ai-company approval list --status PENDING[/dim]"
+            )
 
 
 @approval_app.command("resolve")

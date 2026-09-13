@@ -33,8 +33,8 @@ def test_human_next_actions_for_judge_reject(db_session: Session, tmp_env) -> No
     )
     assert "いまやること" in text
     assert "テスト検証が FAIL" in text
-    assert "approval resolve" in text
-    assert "--approve" in text
+    assert "approval list --status PENDING" in text
+    assert "再度検討せよ" in text
     assert task.id in text
 
 
