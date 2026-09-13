@@ -661,9 +661,8 @@ def human_next_actions(
                 f"     ai-company approval resolve {a.id} --reject --note \"理由\""
             )
         lines.append("")
-        lines.append("3) 承認後、同じディレクトリでスケジューラを再実行:")
-        lines.append(f"   ai-company scheduler run-once --runner {runner}")
-        lines.append("   （終わるたびに同じコマンドを繰り返す）")
+        lines.append("3) 承認後、同じディレクトリで継続実行（人が毎回回す必要なし）:")
+        lines.append(f"   ai-company scheduler continue --runner {runner}")
         return "\n".join(lines)
 
     if blocked and not pending:
@@ -672,26 +671,14 @@ def human_next_actions(
             lines.append(f"   ai-company validation status {t.id}")
         return "\n".join(lines)
 
-    # Priority 2: more work ready / throttled / deferred → run again
+    # Priority 2: more work ready / throttled / deferred → machine continues, not human
     if ready or throttled > 0 or review or deferred:
-        if deferred and not ready:
-            lines.append(
-                "予算待ちタスクがあります。"
-                "購読モード（USD上限 $0）なら次のスケジューラ実行で再開できます。"
-            )
-        else:
-            lines.append("いまやることは、もう一度スケジューラを回すことです。")
-        lines.append("同じディレクトリで、次を繰り返してください:")
+        lines.append("人の操作は不要です。機械側が続ける作業です。")
+        lines.append("一度だけ次を実行すれば、承認が要るまで自動で回します:")
         lines.append("")
-        lines.append(f"   ai-company scheduler run-once --runner {runner}")
+        lines.append(f"   ai-company scheduler continue --runner {runner}")
         lines.append("")
-        lines.append("目安:")
-        lines.append("- 検証が残っている → 検証 → 判定 → 次の実装、と進みます")
-        lines.append(
-            "- THROTTLE（同時起動上限）で待っても異常ではありません。"
-            "次の run-once で消化します"
-        )
-        lines.append("- 止まったら、そのときに出る承認案内に従ってください")
+        lines.append("（`run-once` を毎回打たないでください。THROTTLE は異常ではなく次サイクルで消化します）")
         lines.append("")
         lines.append("状況確認だけするなら:")
         lines.append("   ai-company status")

@@ -38,7 +38,9 @@ def test_human_next_actions_for_judge_reject(db_session: Session, tmp_env) -> No
     assert task.id in text
 
 
-def test_human_next_actions_throttle_says_rerun(db_session: Session, tmp_env) -> None:
+def test_human_next_actions_throttle_points_to_continue(
+    db_session: Session, tmp_env
+) -> None:
     task = create_task(db_session, title="続きの検証", priority=80)
     assert task.status == TaskStatus.READY
     text = human_next_actions(
@@ -50,5 +52,6 @@ def test_human_next_actions_throttle_says_rerun(db_session: Session, tmp_env) ->
         started=3,
     )
     assert "同時起動上限" in text
-    assert "scheduler run-once --runner cursor" in text
-    assert "繰り返してください" in text
+    assert "scheduler continue --runner cursor" in text
+    assert "人の操作は不要" in text
+    assert "run-once` を毎回" in text or "run-once を毎回" in text

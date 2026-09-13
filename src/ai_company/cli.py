@@ -279,6 +279,7 @@ def scheduler_run_once(
     ),
     quiet: bool = typer.Option(False, "--quiet", help="Disable live progress lines"),
 ) -> None:
+    """1サイクルだけ実行（デバッグ用）。通常は scheduler continue を使う。"""
     if runner not in {"mock", "cursor"}:
         raise typer.BadParameter("runner must be 'mock' or 'cursor'")
     from ai_company.services.progress import set_progress
@@ -302,6 +303,57 @@ def scheduler_run_once(
                 runner=runner,
                 throttled=result.throttled,
                 started=result.started,
+            )
+        )
+
+
+@scheduler_app.command("continue")
+def scheduler_continue(
+    fail: bool = typer.Option(False, "--fail", help="Force mock worker failure"),
+    runner: str = typer.Option(
+        "cursor",
+        "--runner",
+        help="Worker runner: mock | cursor",
+    ),
+    max_cycles: int = typer.Option(
+        200, "--max-cycles", help="Safety cap on scheduler cycles"
+    ),
+    project: Optional[str] = typer.Option(None, "--project", help="Limit to project id"),
+    quiet: bool = typer.Option(False, "--quiet", help="Disable live progress lines"),
+) -> None:
+    """THROTTLE／実行待ちが残っている間は自動で回し、人間承認が要るまで止めない。"""
+    if runner not in {"mock", "cursor"}:
+        raise typer.BadParameter("runner must be 'mock' or 'cursor'")
+    from ai_company.services.autonomous import continue_until_gate
+    from ai_company.services.progress import set_progress
+    from ai_company.ui_ja import runner_ja
+
+    set_progress(not quiet)
+    with session_scope() as session:
+        auto = continue_until_gate(
+            session,
+            project_id=project,
+            max_cycles=max_cycles,
+            runner=runner,  # type: ignore[arg-type]
+            mock_succeed=not fail,
+        )
+        stop_ja = {
+            "blocked_exception": "人間の承認／停止タスク",
+            "idle_incomplete": "実行できるタスクなし",
+            "max_cycles": "最大サイクル到達",
+            "all_implementation_done": "実装すべて完了",
+        }.get(auto.stopped_reason, auto.stopped_reason)
+        console.print(
+            f"[cyan]継続実行[/cyan] 方式={runner_ja(runner)} "
+            f"サイクル={auto.cycles} 開始合計={auto.started_total} 停止理由={stop_ja}"
+        )
+        console.print("")
+        console.print(
+            human_next_actions(
+                session,
+                project_id=project,
+                stopped_reason=auto.stopped_reason,
+                runner=runner,
             )
         )
 

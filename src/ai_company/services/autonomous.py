@@ -158,6 +158,185 @@ def _progress_snapshot(session: Session, project_id: str) -> str:
     )
 
 
+def _pending_approvals(session: Session) -> int:
+    from ai_company.db.models import Approval
+
+    return int(
+        session.scalar(
+            select(func.count())
+            .select_from(Approval)
+            .where(Approval.status == "PENDING")
+        )
+        or 0
+    )
+
+
+def _has_runnable_work(session: Session, project_id: str | None = None) -> bool:
+    """READY / RUNNING / DEFERRED_BUDGET (reviveable) remain."""
+    stmt = select(func.count()).select_from(Task).where(
+        Task.status.in_(
+            (
+                TaskStatus.READY,
+                TaskStatus.RUNNING,
+                TaskStatus.DEFERRED_BUDGET,
+            )
+        )
+    )
+    if project_id:
+        stmt = stmt.where(Task.project_id == project_id)
+    return int(session.scalar(stmt) or 0) > 0
+
+
+def continue_until_gate(
+    session: Session,
+    *,
+    project_id: str | None = None,
+    max_cycles: int = 200,
+    runner: RunnerKind = "mock",
+    mock_succeed: bool = True,
+    config: AppConfig | None = None,
+) -> AutonomousResult:
+    """
+    Keep calling Scheduler until a human gate, idle, or max cycles.
+
+    Humans are NOT asked to re-run after THROTTLE / partial cycles —
+    only when BLOCKED / pending approval / truly idle.
+    """
+    cfg = config or load_config()
+    result = AutonomousResult()
+    auto_approve_open_requests(session, project_id=project_id, config=cfg)
+    from ai_company.ui_ja import runner_ja
+
+    progress(
+        f"継続実行を開始  実行方式={runner_ja(runner)}  最大サイクル={max_cycles}"
+        + (f"  案件={project_id}" if project_id else "")
+    )
+
+    for cycle in range(1, max_cycles + 1):
+        result.cycles = cycle
+
+        if _pending_approvals(session) > 0 or (
+            project_id and _has_blocking_exception(session, project_id)
+        ) or (
+            not project_id
+            and int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(Task)
+                    .where(Task.status == TaskStatus.BLOCKED)
+                )
+                or 0
+            )
+            > 0
+        ):
+            result.stopped_reason = "blocked_exception"
+            progress("継続実行停止  理由=人間の承認／停止タスクあり")
+            break
+
+        if project_id and _project_complete(session, project_id):
+            project = session.get(Project, project_id)
+            if project is not None:
+                project.status = ProjectStatus.DONE
+                session.flush()
+                art = create_release_candidate(session, project=project)
+                result.release_candidate_id = art.id
+            result.stopped_reason = "all_implementation_done"
+            progress("継続実行完了  理由=実装タスクすべて完了")
+            break
+
+        snap = (
+            _progress_snapshot(session, project_id)
+            if project_id
+            else "（全案件）"
+        )
+        progress(f"サイクル {cycle}/{max_cycles}  {snap}")
+        sched = run_once(
+            session,
+            config=cfg,
+            mock_succeed=mock_succeed,
+            runner=runner,
+            max_to_start=cfg.settings.scheduler.max_concurrent_workers,
+        )
+        result.last_scheduler = sched
+        result.started_total += sched.started
+        progress(
+            f"サイクル {cycle} 結果  開始={sched.started} 拒否={sched.denied} "
+            f"延期={sched.deferred} 抑制={sched.throttled}"
+        )
+
+        # After a cycle: stop only for human gates or no runnable work
+        if _pending_approvals(session) > 0:
+            result.stopped_reason = "blocked_exception"
+            progress("継続実行停止  理由=人間の承認が必要")
+            break
+
+        if project_id and _has_blocking_exception(session, project_id):
+            result.stopped_reason = "blocked_exception"
+            progress("継続実行停止  理由=停止タスクあり（要判断）")
+            break
+
+        if not project_id:
+            blocked_n = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(Task)
+                    .where(Task.status == TaskStatus.BLOCKED)
+                )
+                or 0
+            )
+            if blocked_n > 0:
+                result.stopped_reason = "blocked_exception"
+                progress("継続実行停止  理由=停止タスクあり（要判断）")
+                break
+
+        if sched.started == 0 and not _has_runnable_work(session, project_id):
+            if project_id and _project_complete(session, project_id):
+                project = session.get(Project, project_id)
+                if project is not None:
+                    project.status = ProjectStatus.DONE
+                    session.flush()
+                    art = create_release_candidate(session, project=project)
+                    result.release_candidate_id = art.id
+                result.stopped_reason = "all_implementation_done"
+                progress("継続実行完了  理由=実装タスクすべて完了")
+            else:
+                result.stopped_reason = "idle_incomplete"
+                progress("継続実行停止  理由=実行できるタスクがない")
+            break
+
+        # started==0 but READY remains (e.g. all THROTTLE) → keep looping
+        if sched.started == 0 and sched.throttled > 0:
+            progress("同時起動上限のため次サイクルへ（人の操作は不要）")
+            continue
+
+        if cycle == max_cycles:
+            result.stopped_reason = "max_cycles"
+            progress("継続実行停止  理由=最大サイクル到達")
+    else:
+        result.stopped_reason = result.stopped_reason or "max_cycles"
+
+    if project_id:
+        project = session.get(Project, project_id)
+        if project is not None:
+            result.project_status = project.status
+        result.summaries.append(human_summary(session, project_id=project_id))
+
+    record_audit(
+        session,
+        event_type="scheduler_continue_finished",
+        actor_type="system",
+        actor_id="scheduler",
+        target_type="project" if project_id else "system",
+        target_id=project_id or "all",
+        metadata={
+            "cycles": result.cycles,
+            "started_total": result.started_total,
+            "stopped_reason": result.stopped_reason,
+        },
+    )
+    return result
+
+
 def run_autonomous(
     session: Session,
     *,
