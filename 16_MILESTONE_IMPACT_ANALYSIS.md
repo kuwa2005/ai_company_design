@@ -20,6 +20,7 @@
 | M8 Judge + Repair Loop | 最大 | 総合判定・差し戻し・再検証 |
 | M9 Dynamic Staffing | 大 | 検証専門職もオンデマンド採用 |
 | M10 Product Autonomous Flow | 最大 | 人間のTask逐次レビューなしで通常系完走 |
+| M11 Local Multi-Project Web UI | 大 | ローカル複数案件の操作面（CLI不要化）。公開SaaSではない |
 
 ## 3. なぜM1から影響するのか
 

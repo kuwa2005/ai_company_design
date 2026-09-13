@@ -61,6 +61,28 @@ Coding Worker自身の「テスト成功」「完成した」という自己申�
 
 > DONEへ遷移するには、定義されたValidation Planを満たしJudgeがPASSすること。
 
+## ローカル開発での使い方
+
+```bash
+# 1) このリポジトリで CLI を PATH に通す（一度だけ）
+cd ~/workspace/ai_company_design
+bash scripts/install-local.sh
+
+# 2) 作業用プロジェクトディレクトリで起動（状態は cwd/.ai_company）
+mkdir -p ~/workspace/web勤怠 && cd ~/workspace/web勤怠
+ai-company start "優秀なWeb勤怠を作って" --autonomous --runner mock
+```
+
+`~/.local/bin` が PATH に無い場合:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+将来は GitHub からのワンライン導入（pipx / uvx）を想定しています。いまは editable + shim です。
+
+将来マイルストーン: **M11 Local Multi-Project Web UI**（ローカル複数案件、CLI 必須運用からの脱却。詳細は `10_IMPLEMENTATION_ROADMAP.md`）。
+
 ## ZIP内の読む順番
 
 1. `00_START_HERE.md`

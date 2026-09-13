@@ -12,7 +12,7 @@ from ai_company.config import AppConfig, load_config
 from ai_company.db.models import Execution, Task, Worker
 from ai_company.enums import ReviewVerdict, TaskStatus, WorkerStatus
 from ai_company.ids import new_id
-from ai_company.paths import executions_dir
+from ai_company.paths import executions_dir, project_root
 from ai_company.services import cost_governor as cg
 from ai_company.services.audit import record_audit
 from ai_company.services.cursor_runner import run_cursor_cli
@@ -449,7 +449,7 @@ def run_cursor_worker(
         stderr_path=stderr_path,
         config=cfg,
         timeout_seconds=timeout_seconds,
-        cwd=cfg.cursor_runner.workspace,
+        cwd=cfg.cursor_runner.workspace or str(project_root()),
         session=session,
     )
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -52,16 +53,22 @@ app.add_typer(approval_app, name="approval")
 console = Console()
 
 
-@app.command("init")
-def init_cmd() -> None:
-    """Initialize local data directory, SQLite schema, and verify config."""
+def ensure_runtime_ready() -> None:
+    """Create local data/DB if missing so `start` works without a prior `init`."""
     clear_config_cache()
-    cfg = load_config()
     data_dir().mkdir(parents=True, exist_ok=True)
     executions_dir().mkdir(parents=True, exist_ok=True)
     reset_engine()
     init_db()
-    console.print(f"[green]Initialized[/green] data dir: {data_dir()}")
+
+
+@app.command("init")
+def init_cmd() -> None:
+    """Initialize local data directory, SQLite schema, and verify config."""
+    ensure_runtime_ready()
+    cfg = load_config()
+    console.print(f"[green]Initialized[/green] project: {Path.cwd().resolve()}")
+    console.print(f"data dir: {data_dir()}")
     console.print(f"DB: {db_path()}")
     console.print(f"Audit log: {audit_log_path()}")
     console.print(
@@ -88,6 +95,7 @@ def start_cmd(
     """Secretary plans Tasks + Staffing Requests. Never spawns workers itself."""
     if runner not in {"mock", "cursor"}:
         raise typer.BadParameter("runner must be 'mock' or 'cursor'")
+    ensure_runtime_ready()
     with session_scope() as session:
         result = start_goal(session, goal)
         console.print(f"[green]Project[/green] {result.project.id}  {result.project.name}")

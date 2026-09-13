@@ -237,3 +237,40 @@ Goal
 - hard budget override
 - policy override
 - production release approval（初期運用）
+
+---
+
+## Milestone 11 - Local Multi-Project Web UI（将来）
+
+レンタルサーバー前提ではない。**Agent（Cursor CLI）が動くローカルマシン上**で、毎回 CLI を叩かずに複数案件を扱う操作面を提供する。
+
+想定ユースケース:
+
+```text
+Local Host (always-on or on-demand)
+  |- Web UI (localhost)
+  |- ai-company core (Queue / Scheduler / Cost / Validation)
+  |- Cursor agent (local)
+  |- Project A  (cwd / worktree)
+  |- Project B
+  |- Project C
+```
+
+実装イメージ:
+- 案件一覧・切替（portfolio）
+- Goal 投入 / autonomous 開始・停止
+- 進捗ダッシュボード（READY / REVIEW / BLOCKED）
+- Exception-only 画面（人間判断キュー）
+- Budget / Staffing / Audit の閲覧
+- 案件ごとの workspace / `.ai_company` 状態
+- CLI と同等の操作を API 経由で実行（spawn 禁止原則は維持）
+
+非目標（このマイルストーンではやらない）:
+- 公開インターネット向け SaaS 化
+- リモート共有ホスティング前提のマルチテナント
+- 人間がコードを逐次レビューするための IDE 代替
+
+完了条件（将来）:
+- ローカルで複数案件を Web UI から開始・監視・例外対応できる
+- 通常運用で CLI 必須にならない
+- Queue → Scheduler → Cost Governor → Worker の不変条件を UI からも破らない

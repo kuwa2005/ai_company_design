@@ -8,11 +8,11 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy.orm import Session
-
 from ai_company.config import AppConfig, CursorRunnerConfig, load_config
 from ai_company.db.models import Task
+from ai_company.paths import project_root
 from ai_company.services.prompt_builder import build_task_prompt
+from sqlalchemy.orm import Session
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ def build_cursor_command(
     output_format_flag = getattr(cfg, "output_format_flag", "--output-format")
     if cfg.output_format:
         cmd.extend([output_format_flag, cfg.output_format])
-    workspace = getattr(cfg, "workspace", None)
+    workspace = getattr(cfg, "workspace", None) or str(project_root())
     if workspace:
         cmd.extend(["--workspace", str(workspace)])
     # Prompt last as positional arg
