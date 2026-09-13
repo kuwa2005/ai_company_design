@@ -650,7 +650,7 @@ def human_next_actions(
         lines.append("")
         lines.append("1) 対話形式で承認（おすすめ）:")
         lines.append("   ai-company approval list --status PENDING")
-        lines.append("   （はい / いいえ / 再度検討せよ で答えられます）")
+        lines.append("   （1=はい / 2=いいえ / 3=再度検討せよ）")
         lines.append("")
         lines.append("   または個別に:")
         for a in pending:
