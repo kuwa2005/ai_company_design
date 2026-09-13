@@ -61,11 +61,17 @@ class CircuitBreakerConfig(BaseModel):
     cooldown_minutes: int = 30
 
 
+class ReviewConfig(BaseModel):
+    enabled: bool = True
+    role: str = "reviewer"
+
+
 class SettingsConfig(BaseModel):
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
+    review: ReviewConfig = Field(default_factory=ReviewConfig)
 
 
 class BudgetConfig(BaseModel):

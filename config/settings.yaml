@@ -15,3 +15,7 @@ circuit_breaker:
   failure_threshold: 5
   window_minutes: 10
   cooldown_minutes: 30
+
+review:
+  enabled: true
+  role: reviewer
