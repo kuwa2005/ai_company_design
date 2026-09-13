@@ -39,6 +39,15 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     clear_config_cache()
     reset_engine()
     init_db()
+    # Tests need headroom; default product budget is $0 (Cursor subscription mode).
+    write_budget_override(
+        tmp_path,
+        budget={
+            "hourly": {"max_runs": 1000, "max_cost_usd": 1000.0},
+            "daily": {"max_runs": 1000, "max_cost_usd": 1000.0},
+            "monthly": {"soft_limit_usd": 200.0, "hard_limit_usd": 250.0},
+        },
+    )
     yield tmp_path
     clear_config_cache()
     reset_engine()

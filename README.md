@@ -81,6 +81,8 @@ export PATH="$HOME/.local/bin:$PATH"
 
 将来は GitHub からのワンライン導入（pipx / uvx）を想定しています。いまは editable + shim です。
 
+予算デフォルトは **$0（Cursor 月額プラン内想定）** です。追加USD枠は設けず、暴走防止は `max_runs` / 同時Worker上限で行います。
+
 将来マイルストーン: **M11 Local Multi-Project Web UI**（ローカル複数案件、CLI 必須運用からの脱却。詳細は `10_IMPLEMENTATION_ROADMAP.md`）。
 
 ## ZIP内の読む順番

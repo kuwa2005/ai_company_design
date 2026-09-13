@@ -13,18 +13,18 @@ from ai_company.paths import config_dir
 
 
 class HourlyBudget(BaseModel):
-    max_runs: int = 20
-    max_cost_usd: float = 5.0
+    max_runs: int = 40
+    max_cost_usd: float = 0.0
 
 
 class DailyBudget(BaseModel):
-    max_runs: int = 100
-    max_cost_usd: float = 20.0
+    max_runs: int = 200
+    max_cost_usd: float = 0.0
 
 
 class MonthlyBudget(BaseModel):
-    soft_limit_usd: float = 200.0
-    hard_limit_usd: float = 250.0
+    soft_limit_usd: float = 0.0
+    hard_limit_usd: float = 0.0
 
 
 class BudgetLimits(BaseModel):
@@ -159,7 +159,8 @@ class AppConfig(BaseModel):
 
     @property
     def default_estimated_cost(self) -> float:
-        return 0.10
+        # $0: runs are assumed covered by Cursor subscription, not extra USD spend.
+        return 0.0
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

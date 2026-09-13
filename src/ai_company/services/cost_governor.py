@@ -49,8 +49,9 @@ class BudgetSnapshot:
 
     @property
     def soft_usage_ratio(self) -> float:
+        # $0 soft limit = subscription mode (no USD throttle via usage tiers).
         if self.soft_limit <= 0:
-            return 1.0
+            return 0.0
         return (self.spent + self.reserved) / self.soft_limit
 
 

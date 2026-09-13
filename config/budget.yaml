@@ -1,13 +1,16 @@
+# Subscription mode: internal USD accounting is $0.
+# Workers are expected to run inside Cursor's monthly plan (no extra $ budget).
+# Runaway protection uses max_runs / concurrency caps, not dollars.
 budget:
   hourly:
-    max_runs: 20
-    max_cost_usd: 5
+    max_runs: 40
+    max_cost_usd: 0
   daily:
-    max_runs: 100
-    max_cost_usd: 20
+    max_runs: 200
+    max_cost_usd: 0
   monthly:
-    soft_limit_usd: 200
-    hard_limit_usd: 250
+    soft_limit_usd: 0
+    hard_limit_usd: 0
 
 usage_policy:
   normal:

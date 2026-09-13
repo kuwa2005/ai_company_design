@@ -60,7 +60,7 @@ class Task(Base):
     forbidden_paths: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, default=2)
-    estimated_cost: Mapped[float] = mapped_column(Float, default=0.1)
+    estimated_cost: Mapped[float] = mapped_column(Float, default=0.0)
     leased_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

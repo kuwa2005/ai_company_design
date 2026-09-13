@@ -27,7 +27,7 @@ class TaskProposal:
     role_required: str = "coding_worker"
     priority: int = 50
     depends_on_titles: list[str] = field(default_factory=list)
-    estimated_cost: float = 0.10
+    estimated_cost: float = 0.0
     risk_level: str = "medium"
     acceptance_criteria: str = ""
 
