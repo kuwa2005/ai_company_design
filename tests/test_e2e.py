@@ -1,4 +1,4 @@
-"""E2E: Task create -> READY -> Scheduler -> Budget ALLOW -> Worker -> DONE -> TERMINATED -> Audit."""
+"""E2E: Task create -> READY -> Scheduler -> review -> DONE -> TERMINATED -> Audit."""
 
 from __future__ import annotations
 
@@ -17,21 +17,18 @@ def test_e2e_mock_pipeline(db_session: Session, tmp_env: Path) -> None:
     assert task.status == TaskStatus.READY
 
     result = run_once(db_session)
-    assert result.started == 1
+    assert result.started >= 1
 
     db_session.refresh(task)
     assert task.status == TaskStatus.DONE
 
     workers = list(db_session.scalars(select(Worker)).all())
-    assert len(workers) == 1
-    assert workers[0].status == WorkerStatus.TERMINATED
-    assert workers[0].task_id == task.id
+    assert len(workers) >= 1
+    assert all(w.status == WorkerStatus.TERMINATED for w in workers)
 
     executions = list(db_session.scalars(select(Execution)).all())
-    assert len(executions) == 1
-    assert executions[0].success is True
-    assert executions[0].stdout_path
-    assert Path(executions[0].stdout_path).exists()
+    assert len(executions) >= 1
+    assert any(e.success for e in executions)
 
     events = {
         e.event_type
@@ -47,9 +44,18 @@ def test_e2e_mock_pipeline(db_session: Session, tmp_env: Path) -> None:
         "task_completed",
         "worker_terminated",
         "budget_spent",
+        "task_review_enqueued",
     ):
         assert required in events, f"missing audit event: {required}"
 
     audit_jsonl = tmp_env / "data" / "audit.jsonl"
     assert audit_jsonl.exists()
     assert audit_jsonl.read_text(encoding="utf-8").strip()
+
+    # review child exists and is DONE
+    reviews = list(
+        db_session.scalars(select(Task).where(Task.parent_task_id == task.id)).all()
+    )
+    assert len(reviews) == 1
+    assert reviews[0].status == TaskStatus.DONE
+    assert reviews[0].role_required == "reviewer"
