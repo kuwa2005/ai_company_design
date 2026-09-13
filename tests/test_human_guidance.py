@@ -31,8 +31,24 @@ def test_human_next_actions_for_judge_reject(db_session: Session, tmp_env) -> No
     text = human_next_actions(
         db_session, project_id=task.project_id, stopped_reason="blocked_exception"
     )
-    assert "止まっている理由" in text
+    assert "いまやること" in text
     assert "テスト検証が FAIL" in text
     assert "approval resolve" in text
     assert "--approve" in text
     assert task.id in text
+
+
+def test_human_next_actions_throttle_says_rerun(db_session: Session, tmp_env) -> None:
+    task = create_task(db_session, title="続きの検証", priority=80)
+    assert task.status == TaskStatus.READY
+    text = human_next_actions(
+        db_session,
+        project_id=task.project_id,
+        stopped_reason="scheduler_pause",
+        runner="cursor",
+        throttled=2,
+        started=3,
+    )
+    assert "同時起動上限" in text
+    assert "scheduler run-once --runner cursor" in text
+    assert "繰り返してください" in text

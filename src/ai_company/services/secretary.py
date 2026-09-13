@@ -516,50 +516,62 @@ def exception_digest(session: Session, *, project_id: str | None = None) -> str:
     return "\n".join(lines)
 
 
+def _task_id_from_reason(reason: str) -> str | None:
+    import re
+
+    m = re.search(r"task=(TASK-[A-Z0-9-]+)", reason or "")
+    return m.group(1) if m else None
+
+
 def _explain_block_reason(reason: str) -> str:
     r = reason or ""
+    task_id = _task_id_from_reason(r)
+    suffix = f"（タスク: {task_id}）" if task_id else ""
     if "judge_reject" in r and "review_fail:test" in r:
         return (
             "独立テスト検証が FAIL し、判定（Judge）が REJECT しました。"
             "自動の修正回数の上限に達したため、タスクを停止しています。"
+            + suffix
         )
     if "judge_reject" in r and "security_fail" in r:
-        return "セキュリティ検証が FAIL したため、判定が REJECT → 停止しました。"
+        return "セキュリティ検証が FAIL したため、判定が REJECT → 停止しました。" + suffix
     if "judge_reject" in r and "critical_finding" in r:
-        return "重大（critical）指摘があったため、判定が REJECT → 停止しました。"
+        return "重大（critical）指摘があったため、判定が REJECT → 停止しました。" + suffix
     if "judge_reject" in r:
-        return f"判定が REJECT したため停止しました（詳細: {r[:120]}）。"
+        return f"判定が REJECT したため停止しました（詳細: {r[:120]}）。" + suffix
     if "judge_human_escalation" in r or "HUMAN_ESCALATION" in r:
-        return "判定が人間エスカレーションになったため停止しています。"
+        return "判定が人間エスカレーションになったため停止しています。" + suffix
     if "retries_exhausted" in r:
-        return "ワーカー実行の失敗が続き、再試行上限に達したため停止しました。"
+        return "ワーカー実行の失敗が続き、再試行上限に達したため停止しました。" + suffix
     if "repair_loop_max_cycles" in r:
-        return "修正ループの回数上限に達したため、自動続行を止めました。"
-    return f"システムが人間判断を要求しています（詳細: {r[:160]}）。"
+        return "修正ループの回数上限に達したため、自動続行を止めました。" + suffix
+    return f"システムが人間判断を要求しています（詳細: {r[:160]}）。" + suffix
 
 
 def human_next_actions(
-    session: Session, *, project_id: str | None = None, stopped_reason: str | None = None
+    session: Session,
+    *,
+    project_id: str | None = None,
+    stopped_reason: str | None = None,
+    runner: str = "cursor",
+    throttled: int = 0,
+    started: int | None = None,
 ) -> str:
-    """停止時に『なぜ止まったか』『人は何をすればよいか』を案内する。"""
+    """『なぜ止まった／一区切りしたか』と『いま人が打つコマンド』を案内する。"""
     from ai_company.db.models import Approval
+    from ai_company.ui_ja import kind_ja, role_ja, status_ja
 
-    lines: list[str] = ["【いま止まっている理由】"]
+    def _tasks(*statuses: str) -> list[Task]:
+        stmt = select(Task).where(Task.status.in_(statuses)).order_by(Task.priority.desc())
+        if project_id:
+            stmt = stmt.where(Task.project_id == project_id)
+        return list(session.scalars(stmt.limit(15)).all())
 
-    reason_map = {
-        "blocked_exception": "停止タスクがあり、自動実行を安全のため中断しました。",
-        "idle_incomplete": "実行できるタスクがなくなりましたが、まだ未完了の作業が残っています。",
-        "max_cycles": "設定した最大サイクル数に達したため停止しました。",
-        "all_implementation_done": "実装タスクはすべて完了しています。",
-    }
-    if stopped_reason:
-        lines.append(f"- {reason_map.get(stopped_reason, stopped_reason)}")
-
-    blocked_stmt = select(Task).where(Task.status == TaskStatus.BLOCKED)
-    if project_id:
-        blocked_stmt = blocked_stmt.where(Task.project_id == project_id)
-    blocked = list(session.scalars(blocked_stmt.limit(10)).all())
-
+    ready = _tasks(TaskStatus.READY)
+    waiting = _tasks(TaskStatus.WAITING)
+    review = _tasks(TaskStatus.REVIEW_REQUIRED)
+    blocked = _tasks(TaskStatus.BLOCKED)
+    running = _tasks(TaskStatus.RUNNING)
     pending = list(
         session.scalars(
             select(Approval)
@@ -569,57 +581,118 @@ def human_next_actions(
         ).all()
     )
 
+    lines: list[str] = ["【いまの状態】"]
+    reason_map = {
+        "blocked_exception": "停止タスクがあり、自動実行を安全のため中断しました。",
+        "idle_incomplete": "実行できるタスクがなくなりましたが、まだ未完了の作業が残っています。",
+        "max_cycles": "設定した最大サイクル数に達したため停止しました。",
+        "all_implementation_done": "実装タスクはすべて完了しています。",
+        "scheduler_pause": "スケジューラが1サイクル終了しました（ここは正常な一区切りです）。",
+    }
+    if stopped_reason:
+        lines.append(f"- {reason_map.get(stopped_reason, stopped_reason)}")
+    if throttled > 0:
+        lines.append(
+            f"- 同時起動上限のため {throttled} 件が待ちになりました"
+            "（検証ワーカー数の上限など）。続きは次のサイクルで実行できます。"
+        )
+    if started is not None:
+        lines.append(f"- このサイクルで開始したタスク: {started} 件")
+
     if blocked:
         lines.append("")
         lines.append("【停止中のタスク】")
-        for t in blocked:
-            lines.append(f"- {t.id}  「{t.title}」")
-            # Find matching pending approval for this task
+        for t in blocked[:8]:
             matched = next((a for a in pending if t.id in (a.reason or "")), None)
+            lines.append(f"- {t.id}  「{t.title}」")
             if matched:
                 lines.append(f"  原因: {_explain_block_reason(matched.reason)}")
             else:
                 lines.append("  原因: 再試行上限または判定により停止（詳細は承認一覧を確認）")
-
-    if pending:
+    if ready:
         lines.append("")
-        lines.append("【人がやること】")
-        lines.append("1. 状況確認:")
-        lines.append("   ai-company approval list --status PENDING")
-        lines.append("   ai-company status")
-        for a in pending:
-            lines.append("")
-            lines.append(f"2. 承認 ID: {a.id}")
-            lines.append(f"   内容: {_explain_block_reason(a.reason)}")
-            lines.append("   ・再実行してよい（修正を続ける）場合:")
-            lines.append(f"     ai-company approval resolve {a.id} --approve")
-            lines.append("   ・打ち切る／方針を変える場合:")
-            lines.append(f"     ai-company approval resolve {a.id} --reject --note \"理由\"")
+        lines.append("【実行待ち】")
+        for t in ready[:8]:
+            lines.append(
+                f"- {t.id}  「{t.title}」  "
+                f"({kind_ja(t.kind)}/{role_ja(t.role_required)})"
+            )
+    if review:
         lines.append("")
-        lines.append("3. 承認して再キューした場合、同じディレクトリで自動実行を再開:")
-        lines.append(
-            '   ai-company scheduler run-once --runner cursor'
-        )
-        lines.append(
-            "   # または案件を続けて回すなら、必要に応じて start の --autonomous を再実行"
-        )
-        lines.append(
-            "   # （既存DBを使うので、新しい計画を増やしたくない場合は scheduler 側が安全）"
-        )
-    elif blocked:
+        lines.append("【検証待ちの親タスク】")
+        for t in review[:8]:
+            lines.append(f"- {t.id}  「{t.title}」  状態={status_ja(t.status)}")
+    if waiting:
         lines.append("")
-        lines.append("【人がやること】")
-        lines.append("- 停止タスクはあるが承認キューが空です。ログと validation status を確認してください。")
-        for t in blocked:
-            lines.append(f"  ai-company validation status {t.id}")
-    else:
+        lines.append(f"【依存待ち】 {len(waiting)} 件（前のタスク完了待ち）")
+    if running:
         lines.append("")
-        lines.append("【人がやること】")
-        lines.append("- いま承認待ちはありません。ai-company status で進捗を確認してください。")
+        lines.append("【実行中】")
+        for t in running[:5]:
+            lines.append(f"- {t.id}  「{t.title}」")
 
     lines.append("")
-    lines.append("補足: 自動実行は『実装の自己申告』だけでは完了にしません。")
-    lines.append("検証 FAIL → 判定 REJECT → 修正上限超過、のとき人間判断に上がります。")
+    lines.append("【いまやること】")
+
+    # Priority 1: human approval
+    if pending:
+        lines.append("人間の承認が必要です。次を実行してください。")
+        lines.append("")
+        lines.append("1) 承認一覧:")
+        lines.append("   ai-company approval list --status PENDING")
+        for a in pending:
+            lines.append("")
+            lines.append(f"2) 承認 ID: {a.id}")
+            lines.append(f"   内容: {_explain_block_reason(a.reason)}")
+            lines.append("   ・続けてよい場合:")
+            lines.append(f"     ai-company approval resolve {a.id} --approve")
+            lines.append("   ・打ち切る場合:")
+            lines.append(
+                f"     ai-company approval resolve {a.id} --reject --note \"理由\""
+            )
+        lines.append("")
+        lines.append("3) 承認後、同じディレクトリでスケジューラを再実行:")
+        lines.append(f"   ai-company scheduler run-once --runner {runner}")
+        lines.append("   （終わるたびに同じコマンドを繰り返す）")
+        return "\n".join(lines)
+
+    if blocked and not pending:
+        lines.append("停止タスクがありますが承認キューが空です。")
+        for t in blocked:
+            lines.append(f"   ai-company validation status {t.id}")
+        return "\n".join(lines)
+
+    # Priority 2: more work ready / throttled → run again
+    if ready or throttled > 0 or review:
+        lines.append("いまやることは、もう一度スケジューラを回すことです。")
+        lines.append("同じディレクトリで、次を繰り返してください:")
+        lines.append("")
+        lines.append(f"   ai-company scheduler run-once --runner {runner}")
+        lines.append("")
+        lines.append("目安:")
+        lines.append("- 検証が残っている → 検証 → 判定 → 次の実装、と進みます")
+        lines.append(
+            "- THROTTLE（同時起動上限）で待っても異常ではありません。"
+            "次の run-once で消化します"
+        )
+        lines.append("- 止まったら、そのときに出る承認案内に従ってください")
+        lines.append("")
+        lines.append("状況確認だけするなら:")
+        lines.append("   ai-company status")
+        return "\n".join(lines)
+
+    if waiting and not ready and not blocked:
+        lines.append("実行待ちはありません。依存待ちだけが残っています。")
+        lines.append("前段タスクの完了／検証を待つか、status で詰まりを確認してください。")
+        lines.append("   ai-company status")
+        return "\n".join(lines)
+
+    if stopped_reason == "all_implementation_done":
+        lines.append("追加作業は不要です。リリース候補を確認してください。")
+        return "\n".join(lines)
+
+    lines.append("いま承認待ちも実行待ちもありません。")
+    lines.append("   ai-company status")
     return "\n".join(lines)
 
 

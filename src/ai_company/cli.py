@@ -160,6 +160,7 @@ def start_cmd(
                     session,
                     project_id=result.project.id,
                     stopped_reason=auto.stopped_reason,
+                    runner=runner,
                 )
             )
         elif dispatch:
@@ -281,17 +282,28 @@ def scheduler_run_once(
     if runner not in {"mock", "cursor"}:
         raise typer.BadParameter("runner must be 'mock' or 'cursor'")
     from ai_company.services.progress import set_progress
+    from ai_company.ui_ja import runner_ja
 
     set_progress(not quiet)
     with session_scope() as session:
         result = run_once(session, mock_succeed=not fail, runner=runner)  # type: ignore[arg-type]
         console.print(
-            f"runner={runner} attempted={result.attempted} started={result.started} "
-            f"denied={result.denied} deferred={result.deferred} throttled={result.throttled} "
-            f"leases_reclaimed={result.leases_reclaimed} zombies_killed={result.zombies_killed}"
+            f"方式={runner_ja(runner)} 試行={result.attempted} 開始={result.started} "
+            f"拒否={result.denied} 延期={result.deferred} 抑制={result.throttled} "
+            f"リース回収={result.leases_reclaimed} ゾンビ停止={result.zombies_killed}"
         )
         for d in result.details or []:
             console.print(d)
+        console.print("")
+        console.print(
+            human_next_actions(
+                session,
+                stopped_reason="scheduler_pause",
+                runner=runner,
+                throttled=result.throttled,
+                started=result.started,
+            )
+        )
 
 
 @scheduler_app.command("cleanup")
@@ -432,6 +444,7 @@ def approval_resolve(
     approve: bool = typer.Option(False, "--approve", help="Approve and requeue task"),
     reject: bool = typer.Option(False, "--reject", help="Reject approval"),
     note: str = typer.Option("", "--note"),
+    runner: str = typer.Option("cursor", "--runner", help="案内に出す runner"),
 ) -> None:
     if approve == reject:
         raise typer.BadParameter("Specify exactly one of --approve or --reject")
@@ -442,7 +455,15 @@ def approval_resolve(
             approve=approve,
             note=note,
         )
-        console.print(f"[green]Resolved[/green] {row.id} -> {row.status}")
+        console.print(f"[green]解決[/green] {row.id} -> {row.status}")
+        console.print("")
+        console.print(
+            human_next_actions(
+                session,
+                stopped_reason="scheduler_pause" if approve else None,
+                runner=runner,
+            )
+        )
 
 
 if __name__ == "__main__":
