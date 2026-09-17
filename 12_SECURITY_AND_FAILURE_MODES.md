@@ -71,3 +71,8 @@ Edge-case Reviewerはhappy pathだけでなく、timeout、null/empty、重複�
 同一モデル・同一promptによる複数Reviewerは完全な独立性を保証しない。
 将来は複数モデル / provider / prompt familyを組み合わせる。
 ただしCursor内で複数モデルを利用する場合でも、Cost Governorと同じQueue統制下に置く。
+# 実行モードによる権限境界
+
+Cursor Agent CLIでは、実装者だけに通常実行を許し、Reviewer/Judgeはask、
+上司はplanモードで起動する。全ロールでsandboxを有効にし、無条件許可の
+`--force`は使わない。ロール別設定は`config/cursor_runner.yaml`で管理する。

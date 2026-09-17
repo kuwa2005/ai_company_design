@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -195,11 +197,10 @@ def record_validation_result(
     worker_id: str,
     execution_id: str,
     verdict: str,
-    findings: list[dict] | None = None,
-    evidence: list[dict] | None = None,
+    findings: list[dict[str, Any]] | None = None,
+    evidence: list[dict[str, Any]] | None = None,
     confidence: float | None = 0.9,
 ) -> ValidationResult:
-    from pathlib import Path
 
     from ai_company.db.models import Artifact
     from ai_company.paths import executions_dir
@@ -273,9 +274,11 @@ def record_validation_result(
     return result
 
 
-def detect_reviewer_conflicts(results: list[ValidationResult]) -> list[dict]:
+def detect_reviewer_conflicts(
+    results: list[ValidationResult],
+) -> list[dict[str, Any]]:
     """Surface PASS vs FAIL / contradictory high-severity findings across reviewers."""
-    conflicts: list[dict] = []
+    conflicts: list[dict[str, Any]] = []
     by_verdict: dict[str, list[str]] = {}
     for r in results:
         by_verdict.setdefault(str(r.verdict), []).append(r.review_type)
@@ -322,10 +325,12 @@ def apply_judge_hard_rules(
     *,
     plan: ValidationPlan,
     config: AppConfig | None = None,
-) -> tuple[str, list[str], list[dict]]:
+) -> tuple[str, list[str], list[dict[str, Any]]]:
     """Code-side hard rules. Returns (verdict, reasons, conflicts)."""
     cfg = config or load_config()
+    ship_first = str(cfg.judge.delivery_mode or "ship_first").lower() == "ship_first"
     reasons: list[str] = []
+    soft: list[str] = []
     results = list(
         session.scalars(
             select(ValidationResult).where(ValidationResult.plan_id == plan.id)
@@ -354,17 +359,29 @@ def apply_judge_hard_rules(
                 reasons.append("security_fail")
                 return JudgeVerdict.REJECT, reasons, conflicts
         if r.verdict == ReviewVerdict.FAIL:
+            if ship_first:
+                soft.append(f"ship_first_ignored:review_fail:{r.review_type}")
+                continue
             reasons.append(f"review_fail:{r.review_type}")
             return JudgeVerdict.REJECT, reasons, conflicts
         if r.verdict == ReviewVerdict.UNCERTAIN:
+            if ship_first:
+                soft.append(f"ship_first_ignored:review_uncertain:{r.review_type}")
+                continue
             reasons.append(f"review_uncertain:{r.review_type}")
             return JudgeVerdict.HUMAN_ESCALATION, reasons, conflicts
 
     if conflicts and any(c.get("type") == "uncertain_vs_pass" for c in conflicts):
-        reasons.append("reviewer_disagreement")
-        return JudgeVerdict.HUMAN_ESCALATION, reasons, conflicts
+        if ship_first:
+            soft.append("ship_first_ignored:reviewer_disagreement")
+        else:
+            reasons.append("reviewer_disagreement")
+            return JudgeVerdict.HUMAN_ESCALATION, reasons, conflicts
 
-    if not reasons:
+    reasons.extend(soft)
+    if soft:
+        reasons.append("ship_first_delivery")
+    elif not reasons:
         reasons.append("all_required_reviews_pass")
     return JudgeVerdict.PASS, reasons, conflicts
 
@@ -453,12 +470,40 @@ def finalize_judge(
         )
         refresh_dependents(session, parent.id)
     elif verdict == JudgeVerdict.REJECT:
-        if repair_exhausted:
+        from ai_company.services.dismissal import (
+            count_stubborn_rejects,
+            fire_stubborn_supervisor,
+            reasons_are_fireable,
+        )
+
+        reject_reason = f"judge_reject:{','.join(reasons)}"
+        # Decision already flushed: stubborn_n includes this REJECT
+        stubborn_n = count_stubborn_rejects(session, parent.id)
+        threshold = int(
+            getattr(cfg.repair_loop, "fire_after_non_security_rejects", 2) or 2
+        )
+        should_fire = (
+            getattr(cfg.repair_loop, "auto_fire_stubborn_supervisor", True)
+            and reasons_are_fireable(reasons)
+            and (
+                stubborn_n >= threshold
+                or repair_exhausted
+            )
+        )
+        if should_fire:
+            fire_stubborn_supervisor(
+                session,
+                task=parent,
+                reason=f"auto_fire:{reject_reason}",
+                fired_role="test_reviewer",
+                config=cfg,
+            )
+        elif repair_exhausted:
             # Coding repair budget used up → escalate to engineering_manager
             escalate_blocked_task(
                 session,
                 task=parent,
-                reason=f"judge_reject:{','.join(reasons)}",
+                reason=reject_reason,
                 config=cfg,
             )
         else:
@@ -467,7 +512,7 @@ def finalize_judge(
                 escalate_blocked_task(
                     session,
                     task=parent,
-                    reason=f"judge_reject:{','.join(reasons)}",
+                    reason=reject_reason,
                     config=cfg,
                 )
             else:
@@ -507,7 +552,7 @@ def finalize_judge(
     return verdict
 
 
-def validation_status(session: Session, task_id: str) -> dict:
+def validation_status(session: Session, task_id: str) -> dict[str, Any]:
     task = session.get(Task, task_id)
     if task is None:
         raise ValueError(f"Task not found: {task_id}")

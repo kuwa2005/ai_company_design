@@ -203,7 +203,9 @@ class ValidationResult(Base):
     __tablename__ = "validation_results"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    plan_id: Mapped[str] = mapped_column(ForeignKey("validation_plans.id"), nullable=False, index=True)
+    plan_id: Mapped[str] = mapped_column(
+        ForeignKey("validation_plans.id"), nullable=False, index=True
+    )
     task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
     review_type: Mapped[str] = mapped_column(String(64), nullable=False)
     worker_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -219,7 +221,9 @@ class JudgeDecision(Base):
     __tablename__ = "judge_decisions"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    plan_id: Mapped[str] = mapped_column(ForeignKey("validation_plans.id"), nullable=False, index=True)
+    plan_id: Mapped[str] = mapped_column(
+        ForeignKey("validation_plans.id"), nullable=False, index=True
+    )
     task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
     verdict: Mapped[str] = mapped_column(String(32), nullable=False)
     reasons: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)

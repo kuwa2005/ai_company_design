@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from ai_company.db.models import Approval, Task
+from ai_company.db.models import Approval
 from ai_company.enums import ApprovalStatus, TaskStatus
 from ai_company.ids import new_id
 from ai_company.services.secretary import human_next_actions
@@ -48,6 +48,8 @@ def test_human_next_actions_blocked_without_pending_is_not_urgent(
     assert "実装マネージャー" in text or "handoff-manager" in text
     assert "scheduler continue" in text
     assert f"handoff-manager {task.id}" in text
+    assert f"fire-supervisor {task.id}" in text
+    assert "解雇" in text or "出荷" in text
 
 
 def test_human_next_actions_throttle_points_to_continue(

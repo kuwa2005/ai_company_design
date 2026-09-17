@@ -5,15 +5,14 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import ai_company.services.secretary as secretary_mod
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+import ai_company.services.secretary as secretary_mod
 from ai_company.db.models import AuditEvent, StaffingRequest, Task, Worker
 from ai_company.enums import TaskStatus
-from ai_company.services.secretary import start_goal, understand_goal
 from ai_company.services.scheduler import run_once
-
+from ai_company.services.secretary import start_goal, understand_goal
 
 FORBIDDEN_IMPORTS = {
     "subprocess",
@@ -90,12 +89,12 @@ def test_dependency_chain_from_secretary(db_session: Session, tmp_env: Path) -> 
 
 
 def test_scheduler_not_secretary_dispatches(db_session: Session, tmp_env: Path) -> None:
-    from tests.conftest import write_validation_override
     from ai_company.config import clear_config_cache
+    from tests.conftest import write_validation_override
 
     write_validation_override(tmp_env, validation={"enabled": False})
     clear_config_cache()
-    result = start_goal(db_session, "小さなツールを作る")
+    start_goal(db_session, "小さなツールを作る")
     assert list(db_session.scalars(select(Worker)).all()) == []
 
     sched = run_once(db_session, runner="mock", max_to_start=2)

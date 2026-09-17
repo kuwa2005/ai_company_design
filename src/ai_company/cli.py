@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -12,14 +11,20 @@ from rich.table import Table
 from ai_company.config import clear_config_cache, load_config
 from ai_company.db import init_db, reset_engine, session_scope
 from ai_company.paths import audit_log_path, data_dir, db_path, executions_dir
-from ai_company.services.audit import list_audit_events
-from ai_company.services.cleanup import run_cleanup
-from ai_company.services.cost_governor import get_budget_snapshot
-from ai_company.services.escalation import list_approvals, resolve_approval
+from ai_company.roles import org_chart_text
 from ai_company.services.approval_flow import (
     run_interactive_approval_session,
     should_run_interactive,
 )
+from ai_company.services.audit import list_audit_events
+from ai_company.services.cleanup import run_cleanup
+from ai_company.services.cost_governor import get_budget_snapshot
+from ai_company.services.debug_trace import (
+    debug_enabled,
+    stuck_trace,
+    task_trace,
+)
+from ai_company.services.escalation import list_approvals, resolve_approval
 from ai_company.services.scheduler import run_once
 from ai_company.services.secretary import (
     answer_question,
@@ -31,12 +36,6 @@ from ai_company.services.secretary import (
 from ai_company.services.tasks import create_project, create_task, list_tasks
 from ai_company.services.validation import validation_status
 from ai_company.services.workers import list_workers
-from ai_company.services.debug_trace import (
-    debug_enabled,
-    stuck_trace,
-    task_trace,
-)
-from ai_company.roles import org_chart_text
 
 app = typer.Typer(
     name="ai-company",
@@ -186,11 +185,11 @@ def start_cmd(
 
 @app.command("status")
 def status_cmd(
-    project: Optional[str] = typer.Option(None, "--project", help="Project id"),
+    project: str | None = typer.Option(None, "--project", help="Project id"),
     guide: bool = typer.Option(
         True, "--guide/--no-guide", help="停止時の次アクション案内を出す"
     ),
-    debug: Optional[bool] = typer.Option(
+    debug: bool | None = typer.Option(
         None,
         "--debug/--no-debug",
         help="トレース／デバッグ情報を出す（AI_COMPANY_DEBUG=1 でも有効）",
@@ -212,7 +211,7 @@ app.add_typer(debug_app, name="debug")
 
 @debug_app.command("stuck")
 def debug_stuck_cmd(
-    project: Optional[str] = typer.Option(None, "--project"),
+    project: str | None = typer.Option(None, "--project"),
 ) -> None:
     """Dump BLOCKED / PENDING / runtime paths for investigation."""
     with session_scope() as session:
@@ -237,7 +236,7 @@ def roles_cmd() -> None:
 @app.command("ask")
 def ask_cmd(
     question: str = typer.Argument(..., help="Question for Secretary about current state"),
-    project: Optional[str] = typer.Option(None, "--project"),
+    project: str | None = typer.Option(None, "--project"),
 ) -> None:
     with session_scope() as session:
         console.print(answer_question(session, question, project_id=project))
@@ -270,11 +269,11 @@ def project_create(
 def task_create(
     title: str = typer.Option(..., "--title", help="Task title"),
     priority: int = typer.Option(50, "--priority", help="Priority 1-100"),
-    project: Optional[str] = typer.Option(None, "--project", help="Project id"),
-    depends_on: Optional[list[str]] = typer.Option(
+    project: str | None = typer.Option(None, "--project", help="Project id"),
+    depends_on: list[str] | None = typer.Option(  # noqa: B008
         None, "--depends-on", help="Dependency task ids"
     ),
-    estimated_cost: Optional[float] = typer.Option(
+    estimated_cost: float | None = typer.Option(
         None, "--estimated-cost", help="Estimated USD cost"
     ),
 ) -> None:
@@ -294,7 +293,7 @@ def task_create(
 
 @task_app.command("list")
 def task_list(
-    status: Optional[str] = typer.Option(None, "--status"),
+    status: str | None = typer.Option(None, "--status"),
 ) -> None:
     with session_scope() as session:
         tasks = list_tasks(session, status=status)
@@ -322,8 +321,8 @@ def task_handoff_manager(
 ) -> None:
     """Give a stuck task to engineering_manager (nearest supervisor), not the president."""
     from ai_company.db.models import Task
-    from ai_company.services.escalation import hand_to_manager
     from ai_company.roles import format_role_label
+    from ai_company.services.escalation import hand_to_manager
 
     with session_scope() as session:
         task = session.get(Task, task_id)
@@ -345,6 +344,47 @@ def task_handoff_manager(
                 f"{format_role_label('engineering_manager')}  "
                 f"再計画={result.id}"
             )
+        console.print("")
+        console.print(
+            human_next_actions(session, runner=runner, stopped_reason="scheduler_pause")
+        )
+
+
+@task_app.command("fire-supervisor")
+def task_fire_supervisor(
+    task_id: str = typer.Argument(..., help="わからず屋ループ中のタスク ID"),
+    reason: str = typer.Option(
+        "manual_fire:ship_first",
+        "--reason",
+        help="解雇理由（監査用）",
+    ),
+    runner: str = typer.Option("cursor", "--runner"),
+) -> None:
+    """Fire a pedantic supervisor mid-process and mark the task DONE (ship next)."""
+    from ai_company.db.models import Task
+    from ai_company.services.dismissal import fire_stubborn_supervisor, reasons_are_fireable
+
+    with session_scope() as session:
+        task = session.get(Task, task_id)
+        if task is None:
+            raise typer.BadParameter(f"Task not found: {task_id}")
+        if not reasons_are_fireable(reason) and "manual_fire" not in reason:
+            raise typer.BadParameter(
+                "セキュリティ／critical／予算系の理由では解雇できません。"
+                " --reason に manual_fire: を付けるか、別経路で対応してください。"
+            )
+        # Manual fire always allowed (president decision to ship)
+        root = fire_stubborn_supervisor(
+            session,
+            task=task,
+            reason=reason if reason.startswith("manual_fire") else f"manual_fire:{reason}",
+            fired_role=task.role_required,
+            actor_id="human:owner",
+        )
+        console.print(
+            f"[green]解雇→出荷[/green] {root.id}「{root.title}」を完了にしました。"
+            " 依存タスクが解放されます。"
+        )
         console.print("")
         console.print(
             human_next_actions(session, runner=runner, stopped_reason="scheduler_pause")
@@ -400,7 +440,7 @@ def scheduler_continue(
     max_cycles: int = typer.Option(
         200, "--max-cycles", help="Safety cap on scheduler cycles"
     ),
-    project: Optional[str] = typer.Option(None, "--project", help="Limit to project id"),
+    project: str | None = typer.Option(None, "--project", help="Limit to project id"),
     quiet: bool = typer.Option(False, "--quiet", help="Disable live progress lines"),
 ) -> None:
     """THROTTLE／実行待ちが残っている間は自動で回し、人間承認が要るまで止めない。"""
@@ -510,7 +550,7 @@ def audit_list(limit: int = typer.Option(20, "--limit")) -> None:
 
 @staffing_app.command("list")
 def staffing_list(
-    project: Optional[str] = typer.Option(None, "--project"),
+    project: str | None = typer.Option(None, "--project"),
 ) -> None:
     with session_scope() as session:
         rows = list_staffing(session, project_id=project)
@@ -536,7 +576,7 @@ def staffing_list(
 @staffing_app.command("approve")
 def staffing_approve(
     request_id: str = typer.Argument(..., help="Staffing request id"),
-    count: Optional[int] = typer.Option(None, "--count", help="Approved headcount"),
+    count: int | None = typer.Option(None, "--count", help="Approved headcount"),
 ) -> None:
     from ai_company.services.staffing import approve_staffing
 
@@ -561,8 +601,8 @@ def staffing_reject(
 
 @approval_app.command("list")
 def approval_list(
-    status: Optional[str] = typer.Option(None, "--status"),
-    interactive: Optional[bool] = typer.Option(
+    status: str | None = typer.Option(None, "--status"),
+    interactive: bool | None = typer.Option(
         None,
         "--interactive/--no-interactive",
         help="未承認を対話形式で処理（TTY + PENDING のとき既定で ON）",

@@ -17,7 +17,7 @@ from ai_company.services.secretary import (
     propose_validation_request,
     start_goal,
 )
-from ai_company.services.staffing import approve_staffing, ensure_staffing_request
+from ai_company.services.staffing import approve_staffing
 from ai_company.services.tasks import create_task
 from ai_company.services.validation import (
     count_repair_cycles,
@@ -73,7 +73,14 @@ def test_m8_repair_loop_max_cycles_escalates_to_manager(
     db_session: Session, tmp_env: Path
 ) -> None:
     write_validation_override(
-        tmp_env, repair_loop={"max_cycles": 1, "max_total_worker_runs": 12, "manager_max_replans": 2}
+        tmp_env,
+        judge={"delivery_mode": "strict"},
+        repair_loop={
+            "max_cycles": 1,
+            "max_total_worker_runs": 12,
+            "manager_max_replans": 2,
+            "auto_fire_stubborn_supervisor": False,
+        },
     )
     clear_config_cache()
     from ai_company.config import load_config
@@ -187,7 +194,15 @@ def test_m10_autonomous_nolook_flow(db_session: Session, tmp_env: Path) -> None:
     write_settings_override(
         tmp_env,
         scheduler={"max_validation_workers": 8, "max_concurrent_workers": 12},
-        staffing={"auto_approve": True, "role_capacity": {"coding_worker": 8, "reviewer": 8, "test_reviewer": 4, "judge": 4}},
+        staffing={
+            "auto_approve": True,
+            "role_capacity": {
+                "coding_worker": 8,
+                "reviewer": 8,
+                "test_reviewer": 4,
+                "judge": 4,
+            },
+        },
     )
     clear_config_cache()
     # Small goal: 3 implementation tasks with deps — autonomous should complete

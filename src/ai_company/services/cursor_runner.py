@@ -8,11 +8,12 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from sqlalchemy.orm import Session
+
 from ai_company.config import AppConfig, CursorRunnerConfig, load_config
 from ai_company.db.models import Task
 from ai_company.paths import project_root
 from ai_company.services.prompt_builder import build_task_prompt
-from sqlalchemy.orm import Session
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,8 @@ def build_cursor_command(
     prompt: str,
     *,
     config: CursorRunnerConfig | None = None,
+    role: str | None = None,
+    task_kind: str | None = None,
 ) -> list[str]:
     cfg = config or load_config().cursor_runner
     executable = cfg.executable
@@ -40,6 +43,17 @@ def build_cursor_command(
     output_format_flag = getattr(cfg, "output_format_flag", "--output-format")
     if cfg.output_format:
         cmd.extend([output_format_flag, cfg.output_format])
+    if task_kind == "replan":
+        cmd.extend(["--mode", cfg.supervisor_mode])
+    elif task_kind in {"validation", "judge"}:
+        cmd.extend(["--mode", cfg.read_only_mode])
+    elif cfg.auto_review:
+        cmd.append("--auto-review")
+    if cfg.sandbox:
+        cmd.extend(["--sandbox", cfg.sandbox])
+    model = cfg.model_by_role.get(role or "")
+    if model:
+        cmd.extend(["--model", model])
     workspace = getattr(cfg, "workspace", None) or str(project_root())
     if workspace:
         cmd.extend(["--workspace", str(workspace)])
@@ -65,7 +79,12 @@ def run_cursor_cli(
     """
     cfg = config or load_config()
     prompt = build_task_prompt(task, session=session)
-    cmd = build_cursor_command(prompt, config=cfg.cursor_runner)
+    cmd = build_cursor_command(
+        prompt,
+        config=cfg.cursor_runner,
+        role=task.role_required,
+        task_kind=str(task.kind),
+    )
     timeout = timeout_seconds
     if timeout is None:
         timeout = float(cfg.cursor_runner.timeout_minutes) * 60.0
@@ -84,6 +103,7 @@ def run_cursor_cli(
             cwd=str(cwd) if cwd else None,
             env=run_env,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
         stdout = completed.stdout or ""
         stderr = completed.stderr or ""
@@ -98,12 +118,18 @@ def run_cursor_cli(
             pid=None,
         )
     except subprocess.TimeoutExpired as exc:
-        stdout = (exc.stdout or b"") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-        stderr = (exc.stderr or b"") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode("utf-8", errors="replace")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
+        raw_stdout = exc.stdout or ""
+        raw_stderr = exc.stderr or ""
+        stdout = (
+            raw_stdout.decode("utf-8", errors="replace")
+            if isinstance(raw_stdout, bytes)
+            else raw_stdout
+        )
+        stderr = (
+            raw_stderr.decode("utf-8", errors="replace")
+            if isinstance(raw_stderr, bytes)
+            else raw_stderr
+        )
         stdout_path.write_text(stdout, encoding="utf-8")
         stderr_path.write_text(
             (stderr + "\n[ai-company] hard timeout\n").lstrip("\n"),

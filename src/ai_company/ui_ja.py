@@ -30,6 +30,7 @@ ROLE_JA = {
     "backend_engineer": "バックエンド",
     "frontend_engineer": "フロントエンド",
     "engineering_manager": "実装マネージャー",
+    "technical_director": "技術責任者",
     "reviewer": "レビュー",
     "test_reviewer": "テスト検証",
     "spec_reviewer": "仕様検証",

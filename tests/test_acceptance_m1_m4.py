@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from ai_company.config import clear_config_cache
 from ai_company.db.models import (
     Artifact,
-    Execution,
     JudgeDecision,
     Task,
     ValidationPlan,
@@ -82,7 +81,10 @@ def test_14_validation_uses_queue(db_session: Session, tmp_env: Path) -> None:
 
 
 def test_15_validation_budget_parallel_cap(db_session: Session, tmp_env: Path) -> None:
-    write_settings_override(tmp_env, scheduler={"max_validation_workers": 2, "max_concurrent_workers": 10})
+    write_settings_override(
+        tmp_env,
+        scheduler={"max_validation_workers": 2, "max_concurrent_workers": 10},
+    )
     clear_config_cache()
     # high risk => many reviewers, but parallel cap / max_validation_workers = 2
     parent = create_task(db_session, title="big", priority=90, risk_level="high")
@@ -132,6 +134,11 @@ def test_17_judge_reject_creates_repair(db_session: Session, tmp_env: Path) -> N
         tmp_env,
         scheduler={"max_validation_workers": 8, "max_concurrent_workers": 10},
     )
+    write_validation_override(
+        tmp_env,
+        judge={"delivery_mode": "strict"},
+        repair_loop={"auto_fire_stubborn_supervisor": False},
+    )
     clear_config_cache()
     parent = create_task(
         db_session, title="sec", priority=80, risk_level="low", max_retries=3
@@ -158,6 +165,11 @@ def test_18_revalidation_new_plan(db_session: Session, tmp_env: Path) -> None:
         tmp_env,
         scheduler={"max_validation_workers": 8, "max_concurrent_workers": 10},
     )
+    write_validation_override(
+        tmp_env,
+        judge={"delivery_mode": "strict"},
+        repair_loop={"auto_fire_stubborn_supervisor": False},
+    )
     clear_config_cache()
     parent = create_task(
         db_session, title="fixable", priority=70, risk_level="low", max_retries=3
@@ -183,8 +195,9 @@ def test_18_revalidation_new_plan(db_session: Session, tmp_env: Path) -> None:
 
 
 def test_19_human_escalation_on_uncertain(db_session: Session, tmp_env: Path) -> None:
+    write_validation_override(tmp_env, judge={"delivery_mode": "strict"})
+    clear_config_cache()
     parent = create_task(db_session, title="ambig", priority=50, risk_level="low")
-    from ai_company.db.models import Execution
 
     # Manually build plan + uncertain result
     start_validation_gate(

@@ -9,11 +9,20 @@ from ai_company.services.result_parser import (
     parse_judge_result,
     parse_reviewer_result,
     parse_structured_result,
+    parse_supervisor_result,
 )
 
 
 def test_parse_valid_completed() -> None:
-    raw = '{"status":"completed","changed_files":["a.py"],"tests":{"passed":1,"failed":0},"commit":null,"issues":[]}'
+    raw = json.dumps(
+        {
+            "status": "completed",
+            "changed_files": ["a.py"],
+            "tests": {"passed": 1, "failed": 0},
+            "commit": None,
+            "issues": [],
+        }
+    )
     parsed = parse_structured_result(raw)
     assert parsed.ok is True
     assert parsed.result is not None
@@ -39,7 +48,14 @@ def test_parse_failed_status_is_not_success() -> None:
 
 
 def test_parse_json_embedded_in_prose() -> None:
-    raw = 'Done.\n{"status":"completed","changed_files":[],"tests":{"passed":0,"failed":0},"commit":null,"issues":[]}\n'
+    payload = {
+        "status": "completed",
+        "changed_files": [],
+        "tests": {"passed": 0, "failed": 0},
+        "commit": None,
+        "issues": [],
+    }
+    raw = f"Done.\n{json.dumps(payload)}\n"
     parsed = parse_structured_result(raw)
     assert parsed.ok is True
 
@@ -146,6 +162,27 @@ def test_parse_for_kind_routes() -> None:
     assert parse_for_kind('{"verdict":"PASS"}', "reviewer").ok is True
     assert parse_for_kind('{"verdict":"PASS"}', "judge").ok is True
     assert parse_for_kind('{"status":"completed"}', "coding").ok is True
+    assert parse_for_kind('{"decision":"RETRY"}', "supervisor").ok is True
+
+
+def test_parse_supervisor_decision_preserves_instructions() -> None:
+    parsed = parse_supervisor_result(
+        json.dumps(
+            {
+                "status": "completed",
+                "decision": "REASSIGN",
+                "reason": "backend ownership",
+                "instructions": "Fix the transaction boundary and rerun tests.",
+                "target_role": "backend_engineer",
+                "confidence": 0.88,
+            }
+        )
+    )
+    assert parsed.ok is True
+    assert parsed.result is not None
+    assert parsed.result["decision"] == "REASSIGN"
+    assert parsed.result["target_role"] == "backend_engineer"
+    assert "transaction" in parsed.result["instructions"]
 
 
 def test_parse_status_done_alias() -> None:

@@ -34,8 +34,14 @@ judge:
   critical_finding_blocks_pass: true
   security_fail_blocks_pass: true
   missing_required_review_blocks_pass: true
+  # ship_first: security FAIL / critical 以外の検証 FAIL では止めない（まず動くものを出す）
+  # strict: 従来どおり全 required review の FAIL で REJECT
+  delivery_mode: ship_first
 
 repair_loop:
   max_cycles: 3
   max_total_worker_runs: 12
   manager_max_replans: 2
+  # わからず屋の検証／上司: セキュリティ以外で拒否が続いたら途中解雇→出荷
+  auto_fire_stubborn_supervisor: true
+  fire_after_non_security_rejects: 2

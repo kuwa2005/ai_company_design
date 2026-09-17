@@ -31,11 +31,31 @@ def test_build_cursor_command_from_config(tmp_env: Path) -> None:
     assert all(isinstance(part, str) for part in cmd)
 
 
+def test_cursor_command_uses_role_safe_noninteractive_modes(tmp_env: Path) -> None:
+    from ai_company.config import load_config
+
+    cfg = load_config().cursor_runner
+    coding = build_cursor_command(
+        "code", config=cfg, role="coding_worker", task_kind="implementation"
+    )
+    reviewer = build_cursor_command(
+        "review", config=cfg, role="security_reviewer", task_kind="validation"
+    )
+    supervisor = build_cursor_command(
+        "decide", config=cfg, role="engineering_manager", task_kind="replan"
+    )
+    assert "--auto-review" in coding
+    assert "--force" not in coding
+    assert reviewer[reviewer.index("--mode") + 1] == "ask"
+    assert supervisor[supervisor.index("--mode") + 1] == "plan"
+    assert coding[coding.index("--sandbox") + 1] == "enabled"
+
+
 def test_cursor_runner_success_saves_execution(
     db_session: Session, tmp_env: Path
 ) -> None:
-    from tests.conftest import write_validation_override
     from ai_company.config import clear_config_cache
+    from tests.conftest import write_validation_override
 
     write_validation_override(tmp_env, validation={"enabled": False})
     clear_config_cache()
@@ -81,8 +101,8 @@ def test_cursor_runner_success_saves_execution(
 def test_cursor_runner_broken_json_not_success(
     db_session: Session, tmp_env: Path
 ) -> None:
-    from tests.conftest import write_validation_override
     from ai_company.config import clear_config_cache
+    from tests.conftest import write_validation_override
 
     write_validation_override(tmp_env, validation={"enabled": False})
     clear_config_cache()
@@ -109,8 +129,8 @@ def test_cursor_runner_broken_json_not_success(
 def test_cursor_runner_timeout_terminates(
     db_session: Session, tmp_env: Path
 ) -> None:
-    from tests.conftest import write_validation_override
     from ai_company.config import clear_config_cache
+    from tests.conftest import write_validation_override
 
     write_validation_override(tmp_env, validation={"enabled": False})
     clear_config_cache()

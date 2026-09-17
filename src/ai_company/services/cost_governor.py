@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ai_company.config import AppConfig, load_config
+from ai_company.config import AppConfig, UsageTier, load_config
 from ai_company.db.models import BudgetEntry, CircuitBreakerState, Project, Task, Worker
 from ai_company.enums import BudgetKind, CostDecision, TaskStatus, WorkerStatus
 from ai_company.ids import new_id
@@ -234,12 +234,10 @@ def open_circuit(session: Session, *, reason: str) -> None:
     )
 
 
-def _usage_tier(config: AppConfig, usage_ratio: float) -> tuple[str, object]:
-    from ai_company.config import UsageTier
-
+def _usage_tier(config: AppConfig, usage_ratio: float) -> tuple[str, UsageTier]:
     policy = config.budget.usage_policy
     best_name = "normal"
-    best: object = policy.get("normal") or UsageTier(
+    best = policy.get("normal") or UsageTier(
         threshold=0.0, max_workers=config.settings.scheduler.max_concurrent_workers
     )
     best_th = -1.0
@@ -288,7 +286,10 @@ def evaluate(
             effective_max_workers=0,
             usage_ratio=snap.soft_usage_ratio,
         )
-    if b.hourly.max_cost_usd > 0 and snap.hourly_spent + task.estimated_cost > b.hourly.max_cost_usd:
+    if (
+        b.hourly.max_cost_usd > 0
+        and snap.hourly_spent + task.estimated_cost > b.hourly.max_cost_usd
+    ):
         return CostVerdict(
             decision=CostDecision.DEFER,
             reason="hourly_max_cost",
@@ -381,10 +382,10 @@ def evaluate(
             kinds={BudgetKind.SPEND},
             scope_type="task",
         )
-        # Approximate: count spend on validation tasks via joining is heavy; use ratio of soft as ceiling for reserved+spent on validation kinds via metadata — simpler: deny if total soft usage already high AND this is validation beyond ratio of soft
+        # Approximate accounting only; concurrent throttles are authoritative for now.
         validation_ceiling = snap.soft_limit * ratio
         # Use reserved+spent already attributed; for MVP use concurrent throttle primarily.
-        # Additional soft gate: if soft usage > ratio and task is validation-only fan-out beyond needed — skip.
+        # Keep these values available for a future validation-only soft gate.
         _ = (val_spent, validation_ceiling)  # reserved for accounting extension
 
     if effective <= 0:

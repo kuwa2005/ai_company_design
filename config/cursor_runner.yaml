@@ -5,4 +5,12 @@ cursor_runner:
   output_format_flag: "--output-format"
   output_format: json
   timeout_minutes: 45
+  # Non-interactive coding should not pause for every safe tool call. Cursor's
+  # server-side safety classifier still reviews actions; --force is not used.
+  auto_review: true
+  sandbox: enabled
+  # Reviewers/Judges cannot edit; supervisors only produce a plan/decision.
+  read_only_mode: ask
+  supervisor_mode: plan
+  model_by_role: {}
   # workspace: null  # optional --workspace path

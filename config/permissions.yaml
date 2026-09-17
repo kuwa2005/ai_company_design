@@ -21,6 +21,13 @@ profiles:
       - task.prioritize
       - staffing.request
       - validation.read
+  technical_director:
+    permissions:
+      - code.read
+      - task.create
+      - task.prioritize
+      - staffing.request
+      - validation.read
   reviewer:
     permissions:
       - code.read

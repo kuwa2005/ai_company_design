@@ -86,3 +86,65 @@ def test_manager_replan_completion_spawns_repair(
     )
     assert repair is not None
     assert repair.status == TaskStatus.READY
+
+
+def test_failed_manager_decision_escalates_one_level_not_to_human(
+    db_session: Session, tmp_env: Path
+) -> None:
+    """A manager failure is owned by the technical director before the president."""
+    from tests.conftest import write_settings_override
+
+    write_settings_override(tmp_env, retry={"default_max_retries": 0})
+    write_validation_override(tmp_env, validation={"enabled": False})
+    clear_config_cache()
+    parent = create_task(db_session, title="hard failure", max_retries=0)
+
+    run_once(db_session, mock_succeed=False, max_to_start=1)
+    manager = db_session.scalar(
+        select(Task).where(
+            Task.parent_task_id == parent.id,
+            Task.kind == "replan",
+            Task.role_required == "engineering_manager",
+        )
+    )
+    assert manager is not None
+
+    run_once(db_session, mock_succeed=False, max_to_start=1)
+    director = db_session.scalar(
+        select(Task).where(
+            Task.parent_task_id == parent.id,
+            Task.kind == "replan",
+            Task.role_required == "technical_director",
+        )
+    )
+    assert director is not None
+    assert db_session.scalar(select(Approval)) is None
+
+
+def test_supervisor_chain_can_recover_without_human(
+    db_session: Session, tmp_env: Path
+) -> None:
+    """Worker failure -> manager failure -> director decision -> repair -> PASS."""
+    from tests.conftest import write_settings_override
+
+    write_settings_override(
+        tmp_env,
+        retry={"default_max_retries": 0},
+        scheduler={"max_validation_workers": 4, "max_concurrent_workers": 8},
+    )
+    clear_config_cache()
+    parent = create_task(
+        db_session, title="recoverable", max_retries=0, risk_level="low"
+    )
+
+    run_once(db_session, mock_succeed=False, max_to_start=1)  # worker -> manager
+    run_once(db_session, mock_succeed=False, max_to_start=1)  # manager -> director
+    run_once(db_session, mock_succeed=True, max_to_start=1)  # director -> repair
+    for _ in range(4):
+        run_once(db_session, mock_succeed=True, max_to_start=8)
+        db_session.refresh(parent)
+        if parent.status == TaskStatus.DONE:
+            break
+
+    assert parent.status == TaskStatus.DONE
+    assert db_session.scalar(select(Approval)) is None

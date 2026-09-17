@@ -236,10 +236,42 @@ def parse_judge_result(stdout: str) -> ParsedResult:
     return ParsedResult(ok=True, result=normalized, error=None)
 
 
-RoleParseKind = Literal["coding", "reviewer", "judge"]
+def parse_supervisor_result(stdout: str) -> ParsedResult:
+    """Parse a supervisor's bounded decision instead of treating it as coding output."""
+    data = _try_load(stdout)
+    if data is None:
+        return ParsedResult(ok=False, result=None, error="unparseable_or_missing_json")
+    status = str(data.get("status") or "completed").lower()
+    if status in {"done", "success", "ok", "complete"}:
+        status = "completed"
+    if status != "completed":
+        return ParsedResult(ok=False, result=data, error=f"invalid_status:{status}")
+    decision = str(data.get("decision") or "RETRY").upper()
+    if decision not in {"RETRY", "REASSIGN", "ESCALATE"}:
+        return ParsedResult(ok=False, result=data, error=f"invalid_decision:{decision}")
+    try:
+        confidence = float(data.get("confidence", 0.7))
+    except (TypeError, ValueError):
+        confidence = 0.7
+    normalized = {
+        "status": "completed",
+        "decision": decision,
+        "reason": str(data.get("reason") or data.get("summary") or ""),
+        "instructions": str(
+            data.get("instructions") or data.get("guidance") or data.get("summary") or ""
+        ),
+        "target_role": str(data.get("target_role") or ""),
+        "confidence": max(0.0, min(1.0, confidence)),
+    }
+    return ParsedResult(ok=True, result=normalized, error=None)
+
+
+RoleParseKind = Literal["coding", "reviewer", "judge", "supervisor"]
 
 
 def parse_for_kind(stdout: str, kind: RoleParseKind) -> ParsedResult:
+    if kind == "supervisor":
+        return parse_supervisor_result(stdout)
     if kind == "reviewer":
         return parse_reviewer_result(stdout)
     if kind == "judge":

@@ -18,9 +18,8 @@ from ai_company.services.audit import record_audit
 from ai_company.services.cursor_runner import run_cursor_cli
 from ai_company.services.escalation import escalate_blocked_task
 from ai_company.services.progress import emit as progress
-from ai_company.services.result_parser import parse_for_kind
+from ai_company.services.result_parser import RoleParseKind, parse_for_kind
 from ai_company.services.tasks import create_task
-from ai_company.ui_ja import role_ja
 from ai_company.services.validation import (
     finalize_judge,
     is_implementation_task,
@@ -29,6 +28,7 @@ from ai_company.services.validation import (
     record_validation_result,
     start_validation_gate,
 )
+from ai_company.ui_ja import role_ja
 
 RunnerKind = Literal["mock", "cursor"]
 
@@ -148,7 +148,11 @@ def _finalize_execution(
         final_status = WorkerStatus.TERMINATED
     terminate_worker(session, worker=worker, status=final_status)
 
-    actual_cost = execution.actual_cost if execution.actual_cost is not None else task.estimated_cost
+    actual_cost = (
+        execution.actual_cost
+        if execution.actual_cost is not None
+        else task.estimated_cost
+    )
     worker.cost_actual = actual_cost
 
     if success:
@@ -196,7 +200,8 @@ def _finalize_execution(
         # Implementation / repair / manager replan
         if is_implementation_task(task):
             if task.kind in {"replan", TaskKind.REPLAN}:
-                # Supervisor decided next steps → spawn a coding repair with guidance
+                # A supervisor decision becomes another queued task. The supervisor
+                # never starts a worker directly.
                 task.status = TaskStatus.DONE
                 session.flush()
                 record_audit(
@@ -213,11 +218,32 @@ def _finalize_execution(
                 )
                 if parent is not None:
                     payload = execution.result_json or {}
+                    decision = str(payload.get("decision") or "RETRY").upper()
                     guidance = (
-                        str(payload.get("summary") or payload.get("reason") or "")
-                        or str(payload.get("objective") or "")
+                        str(payload.get("instructions") or payload.get("summary") or "")
+                        or str(payload.get("reason") or "")
                         or f"Manager replan after: {task.objective}"
                     )
+                    if decision == "ESCALATE":
+                        escalate_blocked_task(
+                            session,
+                            task=task,
+                            reason=(
+                                f"supervisor_requested:{task.role_required}:"
+                                f"{payload.get('reason') or guidance}"
+                            ),
+                            config=cfg,
+                        )
+                        return execution
+
+                    from ai_company.roles import role_def
+
+                    requested_role = str(payload.get("target_role") or "").strip()
+                    target_role = parent.role_required or "coding_worker"
+                    if decision == "REASSIGN" and requested_role:
+                        candidate = role_def(requested_role)
+                        if candidate.layer == "worker":
+                            target_role = requested_role
                     parent.retry_count = 0
                     repair = create_task(
                         session,
@@ -227,7 +253,7 @@ def _finalize_execution(
                         objective=(
                             f"Follow engineering_manager guidance.\n{guidance}"
                         ),
-                        role_required=parent.role_required or "coding_worker",
+                        role_required=target_role,
                         estimated_cost=parent.estimated_cost,
                         parent_task_id=parent.id,
                         kind=TaskKind.REPAIR,
@@ -247,13 +273,15 @@ def _finalize_execution(
                             "parent": parent.id,
                             "via": "manager_replan",
                             "replan_id": task.id,
-                            "handler_role": "engineering_manager",
-                            "executor_role": parent.role_required or "coding_worker",
+                            "handler_role": task.role_required,
+                            "supervisor_role": task.role_required,
+                            "decision": decision,
+                            "executor_role": target_role,
                         },
                     )
                     progress(
-                        f"上司対応完了  実装マネージャーが方針決定 → "
-                        f"{role_ja(parent.role_required or 'coding_worker')} へ修正指示  "
+                        f"上司対応完了  {role_ja(task.role_required)}が方針決定 → "
+                        f"{role_ja(target_role)} へ修正指示  "
                         f"修正={repair.id}  親={parent.id}"
                     )
                 return execution
@@ -325,7 +353,13 @@ def _finalize_execution(
             worker_id=worker.id,
             execution_id=execution.id,
             verdict=ReviewVerdict.FAIL,
-            findings=[{"severity": "high", "category": "execution", "description": "validation worker failed"}],
+            findings=[
+                {
+                    "severity": "high",
+                    "category": "execution",
+                    "description": "validation worker failed",
+                }
+            ],
             evidence=[],
             confidence=0.5,
         )
@@ -415,6 +449,17 @@ def run_mock_worker(
                 "status": "completed",
                 "verdict": "PASS",
                 "reason": "mock judge defers to hard rules",
+                "mock": True,
+                "task_id": task.id,
+            }
+        elif task.kind in {TaskKind.REPLAN, "replan"}:
+            result = {
+                "status": "completed",
+                "decision": "RETRY",
+                "reason": "mock supervisor diagnosis",
+                "instructions": "Apply the supervisor diagnosis and rerun tests.",
+                "target_role": "",
+                "confidence": 0.9,
                 "mock": True,
                 "task_id": task.id,
             }
@@ -526,10 +571,13 @@ def run_cursor_worker(
         session=session,
     )
 
+    parse_kind: RoleParseKind
     if is_validation_task(task):
         parse_kind = "reviewer"
     elif is_judge_task(task):
         parse_kind = "judge"
+    elif task.kind in {TaskKind.REPLAN, "replan"}:
+        parse_kind = "supervisor"
     else:
         parse_kind = "coding"
 

@@ -107,6 +107,11 @@ class CursorRunnerConfig(BaseModel):
     output_format: str = "json"
     timeout_minutes: int = 45
     workspace: str | None = None
+    auto_review: bool = True
+    sandbox: str | None = "enabled"
+    read_only_mode: str = "ask"
+    supervisor_mode: str = "plan"
+    model_by_role: dict[str, str] = Field(default_factory=dict)
 
 
 class CursorRunnerFile(BaseModel):
@@ -131,6 +136,9 @@ class JudgeSection(BaseModel):
     critical_finding_blocks_pass: bool = True
     security_fail_blocks_pass: bool = True
     missing_required_review_blocks_pass: bool = True
+    # ship_first: only security FAIL + critical findings block delivery
+    # strict: any required review FAIL rejects (legacy perfectionist mode)
+    delivery_mode: str = "ship_first"
 
 
 class RepairLoopSection(BaseModel):
@@ -139,6 +147,9 @@ class RepairLoopSection(BaseModel):
     # After coding repair cycles are exhausted, engineering_manager may replan
     # this many times before escalating to the human owner.
     manager_max_replans: int = 2
+    # Fire pedantic supervisors mid-process (non-security) and mark work DONE.
+    auto_fire_stubborn_supervisor: bool = True
+    fire_after_non_security_rejects: int = 2
 
 
 class ValidationFile(BaseModel):

@@ -90,6 +90,20 @@ Judge自身はコードを書かない。
 ### Audit Engine
 重要操作、レビュー根拠、Judge判定を記録する。
 
+### Supervisor Chain
+
+技術的な失敗は人間へ直行させず、`roles.py` の `reports_to` を1段ずつ辿る。
+
+```text
+Coding Worker
+  -> Engineering Manager
+     -> Technical Director
+        -> Human Owner（AIの権限外、または全AI階層を使い切った場合のみ）
+```
+
+各上司は `RETRY / REASSIGN / ESCALATE` の構造化判断を返す。判断から生じる
+修正作業も必ずTask Queueへ登録し、上司がWorkerを直接起動することはない。
+
 ## 3. 重要な境界
 
 LLMは提案・分析するだけ。
@@ -177,3 +191,13 @@ spawn
 - PRD
 - Architecture
 - Audit log
+
+## 7. Cursor Agent CLI実行モード
+
+- 実装Worker: `--auto-review --sandbox enabled`
+- Reviewer / Judge: `--mode ask --sandbox enabled`
+- Engineering Manager / Technical Director: `--mode plan --sandbox enabled`
+- `--force` は使用しない
+
+これにより、安全と分類された実装操作は非対話で進めつつ、検証者と上司は
+workspaceを変更しない。

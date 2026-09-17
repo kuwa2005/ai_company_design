@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
@@ -11,13 +11,17 @@ from sqlalchemy.orm import Session
 from ai_company.db.models import Approval, Task
 from ai_company.enums import ApprovalStatus, TaskStatus
 from ai_company.services.escalation import resolve_approval
-from ai_company.services.secretary import _explain_block_reason, _task_id_from_reason, human_next_actions
+from ai_company.services.secretary import (
+    _explain_block_reason,
+    _task_id_from_reason,
+    human_next_actions,
+)
 
 if TYPE_CHECKING:
     from rich.console import Console
 
 
-class ApprovalChoice(str, Enum):
+class ApprovalChoice(StrEnum):
     YES = "yes"
     NO = "no"
     RECONSIDER = "reconsider"
@@ -113,13 +117,20 @@ def resolve_approval_choice(
         resolution_note = note or "人間判断: 打ち切り"
     elif choice == ApprovalChoice.RECONSIDER:
         resolution_note = note or "人間判断: 再度検討"
-    return resolve_approval(
+    row = resolve_approval(
         session,
         approval_id=approval_id,
         approve=False,
         note=resolution_note,
         resolved_by=resolved_by,
     )
+    if choice == ApprovalChoice.NO:
+        task_id = _task_id_from_reason(row.reason)
+        task = session.get(Task, task_id) if task_id else None
+        if task is not None:
+            task.status = TaskStatus.CANCELLED
+            session.flush()
+    return row
 
 
 def choice_result_message(choice: ApprovalChoice, approval: Approval) -> str:
@@ -127,7 +138,10 @@ def choice_result_message(choice: ApprovalChoice, approval: Approval) -> str:
         return f"[green]承認[/green] {approval.id} → 続行 OK（タスクを再キューしました）"
     if choice == ApprovalChoice.NO:
         return f"[yellow]却下[/yellow] {approval.id} → 打ち切り（自動続行しません）"
-    return f"[yellow]却下[/yellow] {approval.id} → 再度検討（自動続行しません）"
+    return (
+        f"[yellow]再検討[/yellow] {approval.id} → "
+        "次回の自律実行で直属上司へ戻します"
+    )
 
 
 def should_run_interactive(
@@ -177,7 +191,10 @@ def run_interactive_approval_session(
             choice = parse_approval_choice(raw)
             if choice is not None:
                 break
-            console.print("[red]1 / 2 / 3（はい / いいえ / 再度検討せよ）のいずれかを選んでください。[/red]")
+            console.print(
+                "[red]1 / 2 / 3（はい / いいえ / 再度検討せよ）"
+                "のいずれかを選んでください。[/red]"
+            )
 
         row = resolve_approval_choice(session, approval_id=approval.id, choice=choice)
         console.print(choice_result_message(choice, row))

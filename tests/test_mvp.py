@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ai_company.config import clear_config_cache, load_config
 from ai_company.db.models import AuditEvent, BudgetEntry, Task, Worker
-from ai_company.enums import BudgetKind, TaskStatus, WorkerStatus
+from ai_company.enums import BudgetKind, TaskStatus
 from ai_company.services import cost_governor as cg
 from ai_company.services.scheduler import run_once
 from ai_company.services.tasks import create_task
@@ -186,7 +185,11 @@ def test_manager_exhausted_then_human(db_session: Session, tmp_env: Path) -> Non
     write_validation_override(
         tmp_env,
         validation={"enabled": False},
-        repair_loop={"max_cycles": 3, "manager_max_replans": 0},
+        repair_loop={
+            "max_cycles": 3,
+            "manager_max_replans": 0,
+            "auto_fire_stubborn_supervisor": False,
+        },
     )
     clear_config_cache()
     task = create_task(db_session, title="hopeless", priority=50, max_retries=0)
@@ -211,9 +214,9 @@ def test_circuit_breaker(db_session: Session, tmp_env: Path) -> None:
     )
     clear_config_cache()
 
-    t1 = create_task(db_session, title="f1", priority=50)
-    t2 = create_task(db_session, title="f2", priority=50)
-    t3 = create_task(db_session, title="f3", priority=50)
+    create_task(db_session, title="f1", priority=50)
+    create_task(db_session, title="f2", priority=50)
+    create_task(db_session, title="f3", priority=50)
 
     run_once(db_session, mock_succeed=False, max_to_start=1)
     run_once(db_session, mock_succeed=False, max_to_start=1)

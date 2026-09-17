@@ -11,13 +11,14 @@ from ai_company.config import AppConfig, load_config
 from ai_company.db.models import Approval, Task
 from ai_company.enums import ApprovalStatus, TaskKind, TaskStatus
 from ai_company.ids import new_id
-from ai_company.roles import format_role_label, escalation_route_text
+from ai_company.roles import escalation_route_text, format_role_label, supervisor_of
 from ai_company.services.audit import record_audit
 from ai_company.services.progress import emit as progress
 from ai_company.services.staffing import ensure_staffing_request
 from ai_company.services.tasks import create_task
 
 MANAGER_ROLE = "engineering_manager"
+HUMAN_ROLE = "human_owner"
 
 # Reasons that skip AI manager and go straight to human owner.
 _HUMAN_DIRECT_PREFIXES = (
@@ -36,6 +37,7 @@ def _utcnow() -> datetime:
 
 
 def count_manager_replans(session: Session, parent_task_id: str) -> int:
+    """Backward-compatible count of all supervisor decisions for a root task."""
     return len(
         list(
             session.scalars(
@@ -46,6 +48,40 @@ def count_manager_replans(session: Session, parent_task_id: str) -> int:
             ).all()
         )
     )
+
+
+def count_supervisor_replans(
+    session: Session, parent_task_id: str, supervisor_role: str
+) -> int:
+    return len(
+        list(
+            session.scalars(
+                select(Task).where(
+                    Task.parent_task_id == parent_task_id,
+                    Task.kind.in_((TaskKind.REPLAN, "replan")),
+                    Task.role_required == supervisor_role,
+                )
+            ).all()
+        )
+    )
+
+
+def _root_task(session: Session, task: Task) -> Task:
+    """Follow supervisory/repair links to the original reported task."""
+    current = task
+    seen = {task.id}
+    while current.parent_task_id and current.kind in {
+        TaskKind.REPLAN,
+        TaskKind.REPAIR,
+        "replan",
+        "repair",
+    }:
+        parent = session.get(Task, current.parent_task_id)
+        if parent is None or parent.id in seen:
+            break
+        seen.add(parent.id)
+        current = parent
+    return current
 
 
 def reason_requires_human(reason: str) -> bool:
@@ -71,8 +107,11 @@ def _create_human_approval(
     )
     session.add(approval)
     session.flush()
+    route = escalation_route_text(
+        worker_role=task.role_required or "coding_worker", stage="human"
+    )
     progress(
-        f"エスカレーション  {escalation_route_text(worker_role=task.role_required or 'coding_worker', stage='human')}  "
+        f"エスカレーション  {route}  "
         f"タスク={task.id}「{task.title}」  承認={approval.id}"
     )
     record_audit(
@@ -102,49 +141,56 @@ def _create_human_approval(
     return approval
 
 
-def _create_manager_replan(
+def _create_supervisor_replan(
     session: Session,
     *,
-    task: Task,
+    root_task: Task,
+    reported_task: Task,
+    supervisor_role: str,
     reason: str,
     config: AppConfig,
 ) -> Task:
-    """Nearest supervisor (engineering_manager) owns the failure — not the human."""
+    """Create a decision task for the next supervisor; never spawn directly."""
     ensure_staffing_request(
         session,
-        project_id=task.project_id,
-        role=MANAGER_ROLE,
+        project_id=root_task.project_id,
+        role=supervisor_role,
         requested_count=1,
-        reason=f"supervise_failure:{task.id}",
+        reason=f"supervise_failure:{root_task.id}:{reported_task.id}",
         auto_approve=True,
         config=config,
     )
-    replan_n = count_manager_replans(session, task.id) + 1
+    replan_n = count_supervisor_replans(session, root_task.id, supervisor_role) + 1
     replan = create_task(
         session,
-        title=f"Manager replan #{replan_n}: {task.title}",
-        priority=min(100, task.priority + 10),
-        project_id=task.project_id,
+        title=f"Supervisor decision [{supervisor_role}] #{replan_n}: {root_task.title}",
+        priority=min(100, root_task.priority + 10),
+        project_id=root_task.project_id,
         objective=(
-            f"You are the immediate supervisor for the worker who owns 「{task.title}」. "
-            f"The worker/repair loop failed. Do NOT ask the human president. "
-            f"Diagnose, decide a concrete fix plan, and emit coding guidance. "
-            f"Failure reason: {reason}"
+            f"You are {supervisor_role}, the next supervisor for "
+            f"{reported_task.role_required}. The reported work is 「{root_task.title}」 "
+            f"({root_task.id}). Diagnose the failure and choose RETRY, REASSIGN, or "
+            f"ESCALATE. Prefer a concrete instruction to a subordinate for technical "
+            f"problems. Escalate only when this level lacks authority or information. "
+            f"Failure report: {reason}"
         ),
-        role_required=MANAGER_ROLE,
-        estimated_cost=task.estimated_cost,
-        parent_task_id=task.id,
+        role_required=supervisor_role,
+        estimated_cost=root_task.estimated_cost,
+        parent_task_id=root_task.id,
         kind=TaskKind.REPLAN,
-        risk_level=task.risk_level,
-        max_retries=1,
+        risk_level=root_task.risk_level,
+        max_retries=config.default_max_retries,
         config=config,
     )
-    task.status = TaskStatus.FAILED
+    root_task.status = TaskStatus.FAILED
+    if reported_task.id != root_task.id and reported_task.status != TaskStatus.DONE:
+        reported_task.status = TaskStatus.FAILED
     session.flush()
     progress(
-        f"エスカレーション  {escalation_route_text(worker_role=task.role_required or 'coding_worker', stage='manager_replan')}  "
-        f"失敗タスク={task.id}「{task.title}」  "
-        f"→ 上司タスク={replan.id}（{format_role_label(MANAGER_ROLE)}）  "
+        f"上申  {format_role_label(reported_task.role_required)} → "
+        f"{format_role_label(supervisor_role)}  "
+        f"失敗タスク={root_task.id}「{root_task.title}」  "
+        f"→ 判断タスク={replan.id}  "
         f"理由={reason[:120]}"
     )
     record_audit(
@@ -155,13 +201,14 @@ def _create_manager_replan(
         target_type="task",
         target_id=replan.id,
         metadata={
-            "parent": task.id,
+            "parent": root_task.id,
+            "reported_task": reported_task.id,
             "reason": reason,
             "replan_index": replan_n,
-            "role": MANAGER_ROLE,
-            "handler": MANAGER_ROLE,
-            "from_role": task.role_required,
-            "route": "worker→engineering_manager",
+            "role": supervisor_role,
+            "handler": supervisor_role,
+            "from_role": reported_task.role_required,
+            "route": f"{reported_task.role_required}→{supervisor_role}",
         },
     )
     return replan
@@ -175,41 +222,99 @@ def escalate_blocked_task(
     config: AppConfig | None = None,
 ) -> Approval | Task:
     """
-    Route failure to the nearest AI supervisor first.
+    Route failure through the reporting graph, one supervisor at a time.
 
-    Human (president) only when:
-    - reason is policy/budget/manager_exhausted, or
-    - manager replan budget is exhausted.
+    Human approval is created only for explicit governance boundaries or after
+    every AI supervisor level has been tried.
+
+    Pedantic (non-security) loops may auto-fire the stubborn supervisor and
+    mark the root task DONE instead of escalating forever.
     """
+    from ai_company.services.dismissal import maybe_auto_fire, reasons_are_fireable
+
     cfg = config or load_config()
 
-    # If the failing task is itself a manager replan, escalate the root parent to human.
-    root = task
-    if task.kind in {TaskKind.REPLAN, "replan"} and task.parent_task_id:
-        parent = session.get(Task, task.parent_task_id)
-        if parent is not None:
-            root = parent
+    root = _root_task(session, task)
+
+    # Stubborn chain exhausted / pedantic human escalate → fire, don't bother president
+    if reason_requires_human(reason) and reasons_are_fireable(reason):
+        fired = maybe_auto_fire(
+            session,
+            task=root,
+            reason=reason,
+            fired_role="stubborn_supervisor",
+            config=cfg,
+        )
+        if fired is not None:
+            return fired
+        if getattr(cfg.repair_loop, "auto_fire_stubborn_supervisor", True):
+            from ai_company.services.dismissal import fire_stubborn_supervisor
+
+            return fire_stubborn_supervisor(
+                session,
+                task=root,
+                reason=f"auto_fire_human_gate:{reason}",
+                fired_role="stubborn_supervisor",
+                config=cfg,
+            )
+        return _create_human_approval(session, task=root, reason=reason)
+
+    if reason_requires_human(reason):
+        return _create_human_approval(session, task=root, reason=reason)
+
+    # Mid-flight: enough non-security rejects already → fire before another replan
+    fired = maybe_auto_fire(
+        session,
+        task=root,
+        reason=reason,
+        fired_role=task.role_required,
+        config=cfg,
+    )
+    if fired is not None:
+        return fired
+
+    current_role = task.role_required or "coding_worker"
+    supervisor_role = supervisor_of(current_role)
+    configured_max = getattr(cfg.repair_loop, "manager_max_replans", 2)
+    max_replans = 2 if configured_max is None else max(0, int(configured_max))
+
+    # Exhausting one level promotes the issue to that supervisor's supervisor.
+    while supervisor_role not in {None, HUMAN_ROLE} and count_supervisor_replans(
+        session, root.id, supervisor_role
+    ) >= max_replans:
+        current_role = supervisor_role
+        supervisor_role = supervisor_of(current_role)
+
+    if supervisor_role in {None, HUMAN_ROLE}:
+        human_reason = (
+            f"manager_exhausted:supervisor_chain:after={current_role}:{reason}"
+        )
+        if reasons_are_fireable(human_reason) and getattr(
+            cfg.repair_loop, "auto_fire_stubborn_supervisor", True
+        ):
+            from ai_company.services.dismissal import fire_stubborn_supervisor
+
+            return fire_stubborn_supervisor(
+                session,
+                task=root,
+                reason=f"auto_fire:{human_reason}",
+                fired_role=current_role,
+                config=cfg,
+            )
         return _create_human_approval(
             session,
             task=root,
-            reason=f"manager_exhausted:replan_failed:{reason}",
+            reason=human_reason,
         )
 
-    if reason_requires_human(reason):
-        return _create_human_approval(session, task=task, reason=reason)
-
-    max_replans = getattr(cfg.repair_loop, "manager_max_replans", 2)
-    if max_replans is None:
-        max_replans = 2
-    max_replans = int(max_replans)
-    if count_manager_replans(session, task.id) >= max_replans:
-        return _create_human_approval(
-            session,
-            task=task,
-            reason=f"manager_exhausted:max_replans:{max_replans}:{reason}",
-        )
-
-    return _create_manager_replan(session, task=task, reason=reason, config=cfg)
+    return _create_supervisor_replan(
+        session,
+        root_task=root,
+        reported_task=task,
+        supervisor_role=supervisor_role,
+        reason=reason,
+        config=cfg,
+    )
 
 
 def pending_approval_task_ids(session: Session) -> set[str]:

@@ -24,6 +24,7 @@ staffing:
     backend_engineer: 3
     frontend_engineer: 2
     engineering_manager: 2
+    technical_director: 1
     reviewer: 4
     judge: 2
     test_reviewer: 2

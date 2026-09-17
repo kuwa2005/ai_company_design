@@ -157,21 +157,21 @@ def _keyword_plan(goal: str) -> GoalPlan:
             ),
             TaskProposal(
                 title="データモデル設計",
-                objective="従業員・勤怠記録・承認フローのスキーマを定義する",
+                objective="従業員・勤怠記録・承認フローのスキーマを定義する（まず動くAPIのための最小スキーマ）",
                 role_required="backend_engineer",
                 priority=75,
                 depends_on_titles=["要件・画面/API境界の整理"],
-                risk_level="high",
-                acceptance_criteria="スキーマと制約が定義されている",
+                risk_level="medium",
+                acceptance_criteria="スキーマと制約が定義され、API実装に進める",
             ),
             TaskProposal(
                 title="Attendance API 実装",
-                objective="打刻・一覧・修正APIを実装する",
+                objective="打刻・一覧・修正APIを実装する（完璧より先に動くエンドポイント）",
                 role_required="backend_engineer",
                 priority=70,
                 depends_on_titles=["データモデル設計"],
-                risk_level=goal_risk if goal_risk in {"high", "critical"} else "high",
-                acceptance_criteria="打刻・一覧・修正がテスト可能",
+                risk_level="medium",
+                acceptance_criteria="打刻・一覧・修正が手動または自動で確認できる",
             ),
             TaskProposal(
                 title="Web UI 実装",
@@ -203,6 +203,7 @@ def _keyword_plan(goal: str) -> GoalPlan:
             "Secretary created Task/Staffing/Validation proposals only.",
             "Worker count is decided later by Scheduler + Cost Governor.",
             "Coding completion routes to Validation Gate — never self-DONE.",
+            "Delivery mode prefers a working slice over perfectionist review loops.",
         ]
         validation_requests = [
             propose_validation_request(t.risk_level) for t in tasks if t.role_required != "reviewer"
@@ -546,7 +547,8 @@ def responsibility_digest(session: Session, *, project_id: str | None = None) ->
             )
         else:
             lines.append(
-                f"- 失敗「{t.title}」({t.id}) 担当={format_role_label(t.role_required or 'coding_worker')}"
+                f"- 失敗「{t.title}」({t.id}) "
+                f"担当={format_role_label(t.role_required or 'coding_worker')}"
             )
 
     for t in _scoped(TaskStatus.BLOCKED):
@@ -725,7 +727,7 @@ def human_next_actions(
                 if last:
                     lines.append(f"  原因: {_explain_block_reason(last.reason)}")
                     lines.append(
-                        f"  状態: 承認キュー空 → 実装マネージャーへ移管可"
+                        "  状態: 承認キュー空 → 実装マネージャーへ移管可"
                     )
                 else:
                     lines.append(
@@ -791,14 +793,16 @@ def human_next_actions(
             "（「再度検討／却下」済み、または旧ルートの孤児停止）。"
         )
         lines.append("")
-        lines.append("いまやることは、直近上司（実装マネージャー）に戻すことです。")
-        lines.append("一度だけ次を実行すれば、マネージャー再計画→修正が自動で続きます:")
+        lines.append("いまやることは、次のいずれかです。")
         lines.append("")
+        lines.append("A) 直近上司（実装マネージャー）に戻して直させる:")
         lines.append(f"   ai-company scheduler continue --runner {runner}")
-        lines.append("")
-        lines.append("個別に戻すなら:")
         for t in blocked:
             lines.append(f"   ai-company task handoff-manager {t.id}")
+        lines.append("")
+        lines.append("B) わからず屋を解雇して出荷する（セキュリティ以外の膠着向け）:")
+        for t in blocked:
+            lines.append(f"   ai-company task fire-supervisor {t.id}")
         lines.append("")
         lines.append("調査だけするなら:")
         lines.append("   ai-company status --debug")
@@ -813,7 +817,10 @@ def human_next_actions(
         lines.append("")
         lines.append(f"   ai-company scheduler continue --runner {runner}")
         lines.append("")
-        lines.append("（`run-once` を毎回打たないでください。THROTTLE は異常ではなく次サイクルで消化します）")
+        lines.append(
+            "（`run-once` を毎回打たないでください。THROTTLE は異常ではなく"
+            "次サイクルで消化します）"
+        )
         lines.append("")
         lines.append("状況確認だけするなら:")
         lines.append("   ai-company status")
@@ -845,7 +852,8 @@ def answer_question(session: Session, question: str, *, project_id: str | None =
         if blocked or deferred:
             return (
                 f"最優先の問題: BLOCKED={blocked}, DEFERRED_BUDGET={deferred}.\n"
-                "SecretaryはWorkerを起動しません。scheduler と Cost Governor を確認してください。\n\n"
+                "SecretaryはWorkerを起動しません。scheduler と Cost Governor を"
+                "確認してください。\n\n"
                 + summary
             )
         return "現時点で BLOCKED/DEFERRED はありません。\n\n" + summary

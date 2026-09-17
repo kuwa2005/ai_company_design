@@ -95,3 +95,25 @@ def test_resolve_reconsider_rejects_with_note(db_session: Session, tmp_env) -> N
     assert row.status == ApprovalStatus.REJECTED
     assert "再度検討" in row.reason
     assert task.status == TaskStatus.BLOCKED
+
+
+def test_resolve_no_cancels_instead_of_being_auto_recovered(
+    db_session: Session, tmp_env
+) -> None:
+    task = create_task(db_session, title="中止対象", priority=80)
+    task.status = TaskStatus.BLOCKED
+    approval = Approval(
+        id=new_id("APPR"),
+        action="task.unblock_or_replan",
+        requested_by="system",
+        status=ApprovalStatus.PENDING,
+        reason=f"manager_exhausted:test; task={task.id}; title={task.title}",
+    )
+    db_session.add(approval)
+    db_session.flush()
+
+    resolve_approval_choice(
+        db_session, approval_id=approval.id, choice=ApprovalChoice.NO
+    )
+    db_session.refresh(task)
+    assert task.status == TaskStatus.CANCELLED

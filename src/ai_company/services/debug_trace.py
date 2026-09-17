@@ -9,7 +9,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ai_company.db.models import Approval, AuditEvent, JudgeDecision, Task, ValidationPlan, ValidationResult
+from ai_company.db.models import (
+    Approval,
+    AuditEvent,
+    JudgeDecision,
+    Task,
+    ValidationPlan,
+    ValidationResult,
+)
 from ai_company.enums import ApprovalStatus, TaskStatus
 from ai_company.paths import audit_log_path, data_dir, db_path, project_root
 from ai_company.services.secretary import _explain_block_reason, _task_id_from_reason
@@ -82,7 +89,8 @@ def task_trace(session: Session, task_id: str, *, audit_limit: int = 12) -> str:
             )
             for r in results:
                 lines.append(
-                    f"  result {r.review_type}={r.verdict} findings={_compact(r.findings, limit=180)}"
+                    f"  result {r.review_type}={r.verdict} "
+                    f"findings={_compact(r.findings, limit=180)}"
                 )
             decisions = list(
                 session.scalars(

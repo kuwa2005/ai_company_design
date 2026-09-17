@@ -29,6 +29,12 @@ def test_judge_pass_marks_parent_done(db_session: Session, tmp_env: Path) -> Non
 def test_validation_fail_triggers_judge_reject(
     db_session: Session, tmp_env: Path
 ) -> None:
+    write_validation_override(
+        tmp_env,
+        judge={"delivery_mode": "strict"},
+        repair_loop={"auto_fire_stubborn_supervisor": False},
+    )
+    clear_config_cache()
     parent = create_task(
         db_session, title="feature", priority=70, risk_level="low", max_retries=2
     )
@@ -75,7 +81,10 @@ def test_human_approval_requeue_after_manager_exhausted(
     write_validation_override(
         tmp_env,
         validation={"enabled": False},
-        repair_loop={"manager_max_replans": 0},
+        repair_loop={
+            "manager_max_replans": 0,
+            "auto_fire_stubborn_supervisor": False,
+        },
     )
     clear_config_cache()
     task = create_task(db_session, title="hopeless", priority=50, max_retries=0)

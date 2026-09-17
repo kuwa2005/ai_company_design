@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
@@ -32,11 +32,7 @@ class SchedulerResult:
     throttled: int = 0
     leases_reclaimed: int = 0
     zombies_killed: int = 0
-    details: list[dict[str, str]] | None = None
-
-    def __post_init__(self) -> None:
-        if self.details is None:
-            self.details = []
+    details: list[dict[str, str]] = field(default_factory=list)
 
 
 def _utcnow() -> datetime:

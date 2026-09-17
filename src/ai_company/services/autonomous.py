@@ -19,7 +19,6 @@ from ai_company.services.secretary import exception_digest, human_summary
 from ai_company.services.staffing import auto_approve_open_requests
 from ai_company.services.workers import RunnerKind
 
-
 TERMINAL_TASK = {
     TaskStatus.DONE,
     TaskStatus.BLOCKED,
@@ -131,7 +130,7 @@ def create_release_candidate(
 
 
 def _progress_snapshot(session: Session, project_id: str) -> str:
-    counts = {s: 0 for s in (
+    counts: dict[str, int] = {str(s): 0 for s in (
         TaskStatus.DONE,
         TaskStatus.READY,
         TaskStatus.WAITING,
@@ -148,13 +147,13 @@ def _progress_snapshot(session: Session, project_id: str) -> str:
     for status, n in rows:
         counts[str(status)] = int(n)
     return (
-        f"完了={counts.get(TaskStatus.DONE, 0)} "
-        f"実行待ち={counts.get(TaskStatus.READY, 0)} "
-        f"依存待ち={counts.get(TaskStatus.WAITING, 0)} "
-        f"実行中={counts.get(TaskStatus.RUNNING, 0)} "
-        f"検証待ち={counts.get(TaskStatus.REVIEW_REQUIRED, 0)} "
-        f"停止={counts.get(TaskStatus.BLOCKED, 0)} "
-        f"失敗={counts.get(TaskStatus.FAILED, 0)}"
+        f"完了={counts.get(str(TaskStatus.DONE), 0)} "
+        f"実行待ち={counts.get(str(TaskStatus.READY), 0)} "
+        f"依存待ち={counts.get(str(TaskStatus.WAITING), 0)} "
+        f"実行中={counts.get(str(TaskStatus.RUNNING), 0)} "
+        f"検証待ち={counts.get(str(TaskStatus.REVIEW_REQUIRED), 0)} "
+        f"停止={counts.get(str(TaskStatus.BLOCKED), 0)} "
+        f"失敗={counts.get(str(TaskStatus.FAILED), 0)}"
     )
 
 
@@ -363,15 +362,26 @@ def run_autonomous(
 
     result = AutonomousResult(project_status=project.status)
     auto_approve_open_requests(session, project_id=project_id, config=cfg)
+    from ai_company.services.escalation import recover_orphaned_blocked_to_manager
     from ai_company.ui_ja import runner_ja
+
+    recovered = recover_orphaned_blocked_to_manager(
+        session, project_id=project_id, config=cfg
+    )
 
     progress(
         f"自動実行を開始  案件={project_id}  実行方式={runner_ja(runner)}  "
         f"最大サイクル={max_cycles}  {_progress_snapshot(session, project_id)}"
+        + (f"  孤児回収={len(recovered)}" if recovered else "")
     )
 
     for cycle in range(1, max_cycles + 1):
         result.cycles = cycle
+        # A rejected/reconsidered old approval must not leave the company idle.
+        # Give such work back to its nearest AI supervisor before considering a stop.
+        recover_orphaned_blocked_to_manager(
+            session, project_id=project_id, config=cfg
+        )
         if _project_complete(session, project_id):
             project.status = ProjectStatus.DONE
             session.flush()

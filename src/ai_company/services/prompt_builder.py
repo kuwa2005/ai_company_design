@@ -34,6 +34,8 @@ def load_role_prompt(role: str) -> str:
         "architecture_reviewer": "architecture_reviewer.md",
         "judge": "judge.md",
         "secretary": "secretary.md",
+        "engineering_manager": "supervisor.md",
+        "technical_director": "supervisor.md",
     }
     name = mapping.get(role, "coding_worker.md")
     path = prompts_dir() / name
@@ -137,6 +139,16 @@ Existing Validation Results:
 
 Hard rules still apply in the orchestrator. Your JSON is advisory input.
 """
+    elif task.kind == "replan":
+        extra = f"""
+---
+Supervisor Context
+Reported Task: {parent_ctx.get("parent_id", task.parent_task_id or "-")}
+Reported Title: {parent_ctx.get("parent_title", "-")}
+Reported Objective: {parent_ctx.get("parent_objective", "-")}
+Reported Acceptance Criteria: {parent_ctx.get("parent_acceptance", "-")}
+Failure Report: {task.objective}
+"""
 
     return f"""{role_prompt}
 
@@ -158,4 +170,6 @@ When finished, print a single JSON object (no markdown fences) appropriate for y
 Coding: status/changed_files/tests/commit/issues.
 Reviewer: verdict (PASS|FAIL|UNCERTAIN), summary, findings[], evidence[], confidence.
 Judge: verdict (PASS|REJECT|HUMAN_ESCALATION), reason, blocking_findings[], repair_tasks[].
+Supervisor: status, decision (RETRY|REASSIGN|ESCALATE), reason, instructions,
+target_role, confidence.
 """

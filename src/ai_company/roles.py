@@ -36,8 +36,15 @@ ROLES: dict[str, RoleDef] = {
         id="engineering_manager",
         title_ja="実装マネージャー",
         layer="manager",
-        reports_to="human_owner",
+        reports_to="technical_director",
         handles="実装失敗・修正上限後の再計画。末端の直近上司",
+    ),
+    "technical_director": RoleDef(
+        id="technical_director",
+        title_ja="技術責任者",
+        layer="manager",
+        reports_to="human_owner",
+        handles="実装マネージャーで解決できない技術判断・部門横断の再計画",
     ),
     "judge": RoleDef(
         id="judge",
@@ -134,6 +141,23 @@ def role_def(role_id: str) -> RoleDef:
 
 def supervisor_of(role_id: str) -> str | None:
     return role_def(role_id).reports_to
+
+
+def escalation_chain(role_id: str, *, max_depth: int = 16) -> list[str]:
+    """Return the reporting chain and fail closed if the org chart has a cycle."""
+    chain: list[str] = []
+    seen = {role_id}
+    current = role_id
+    for _ in range(max_depth):
+        supervisor = supervisor_of(current)
+        if supervisor is None:
+            return chain
+        if supervisor in seen:
+            raise ValueError(f"reporting cycle detected at role: {supervisor}")
+        chain.append(supervisor)
+        seen.add(supervisor)
+        current = supervisor
+    raise ValueError(f"reporting chain exceeds max depth: {role_id}")
 
 
 def format_role_label(role_id: str) -> str:

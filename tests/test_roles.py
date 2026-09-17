@@ -17,7 +17,8 @@ def test_org_chart_lists_manager_and_president() -> None:
     assert "社長（人間）" in text
     assert "engineering_manager" in text
     assert supervisor_of("coding_worker") == "engineering_manager"
-    assert supervisor_of("engineering_manager") == "human_owner"
+    assert supervisor_of("engineering_manager") == "technical_director"
+    assert supervisor_of("technical_director") == "human_owner"
 
 
 def test_responsibility_digest_shows_manager_route(
