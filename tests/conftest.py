@@ -34,6 +34,7 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     monkeypatch.setenv("AI_COMPANY_DATA_DIR", str(data))
     monkeypatch.setenv("AI_COMPANY_CONFIG_DIR", str(cfg))
     monkeypatch.setenv("AI_COMPANY_DB_PATH", str(data / "test.db"))
+    monkeypatch.setenv("AI_COMPANY_PROJECT_DIR", str(tmp_path))
 
     clear_config_cache()
     reset_engine()

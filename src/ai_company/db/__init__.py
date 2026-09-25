@@ -68,8 +68,20 @@ def reset_engine() -> None:
 
 
 def init_db(url: str | None = None) -> Engine:
+    # Ensure SchemaVersion is registered on Base.metadata
+    from ai_company.db import schema_version as _schema_version  # noqa: F401
+
     engine = get_engine(url)
     Base.metadata.create_all(engine)
+    try:
+        from ai_company.db.schema_version import ensure_schema_version
+
+        factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+        with factory() as session:
+            ensure_schema_version(session)
+            session.commit()
+    except Exception:
+        pass
     return engine
 
 

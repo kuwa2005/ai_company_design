@@ -16,7 +16,11 @@ from tests.conftest import write_validation_override
 
 
 def test_continue_drains_ready_without_human(db_session: Session, tmp_env: Path) -> None:
-    write_validation_override(tmp_env, validation={"enabled": False})
+    write_validation_override(
+        tmp_env,
+        validation={"enabled": False},
+        closure_loops={"enabled": False},
+    )
     clear_config_cache()
     for i in range(3):
         create_task(db_session, title=f"job-{i}", priority=80 - i)

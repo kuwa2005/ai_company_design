@@ -112,6 +112,12 @@ class Execution(Base):
     estimated_cost: Mapped[float] = mapped_column(Float, default=0.0)
     actual_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
     result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # P0-4 / P0-5 runtime fields (nullable for backward compat with create_all)
+    pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    worktree_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    base_commit: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    runner_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 class StaffingRequest(Base):
@@ -174,6 +180,25 @@ class Artifact(Base):
     path: Mapped[str] = mapped_column(String(1024), nullable=False)
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class EvidenceBundle(Base):
+    """Objective evidence captured for an execution (P0-2)."""
+
+    __tablename__ = "evidence_bundles"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    execution_id: Mapped[str] = mapped_column(
+        ForeignKey("executions.id"), nullable=False, index=True
+    )
+    artifact_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    diff_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    changed_files: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    commands: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    test_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class CircuitBreakerState(Base):

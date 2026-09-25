@@ -30,7 +30,14 @@ ROLES: dict[str, RoleDef] = {
         title_ja="秘書",
         layer="manager",
         reports_to="human_owner",
-        handles="計画・人員依頼・状況要約（Worker起動はしない）",
+        handles="計画・人員依頼・状況要約（Worker起動はしない）。事業企画の薄い帽子も兼ねる",
+    ),
+    "project_coordinator": RoleDef(
+        id="project_coordinator",
+        title_ja="プロジェクト推進",
+        layer="manager",
+        reports_to="secretary",
+        handles="スコープ・依存・優先度・遅延リスクの点検と是正タスク起票",
     ),
     "engineering_manager": RoleDef(
         id="engineering_manager",
@@ -76,10 +83,10 @@ ROLES: dict[str, RoleDef] = {
     ),
     "test_reviewer": RoleDef(
         id="test_reviewer",
-        title_ja="テスト検証",
+        title_ja="テスト検証（ゲート）",
         layer="specialist",
         reports_to="judge",
-        handles="独立テスト検証",
+        handles="実装ゲート検証（緑≠正しい。妥当性は test_auditor）",
     ),
     "spec_reviewer": RoleDef(
         id="spec_reviewer",
@@ -109,12 +116,82 @@ ROLES: dict[str, RoleDef] = {
         reports_to="judge",
         handles="アーキテクチャ検証",
     ),
+    "completeness_auditor": RoleDef(
+        id="completeness_auditor",
+        title_ja="残件監査（本当にもう無いか）",
+        layer="specialist",
+        reports_to="secretary",
+        handles="実装キュー空後にゴール残件を執拗に再発見し、不足タスクを起票",
+    ),
+    "product_planner": RoleDef(
+        id="product_planner",
+        title_ja="商品企画",
+        layer="specialist",
+        reports_to="secretary",
+        handles="価値適合・優先機能・非目標の点検と企画改善タスク起票",
+    ),
+    "usability_auditor": RoleDef(
+        id="usability_auditor",
+        title_ja="使い勝手監査",
+        layer="specialist",
+        reports_to="secretary",
+        handles="動く完成品の使い勝手改善余地を自問し、改善タスクを起票",
+    ),
+    "customer_success": RoleDef(
+        id="customer_success",
+        title_ja="カスタマーサクセス",
+        layer="specialist",
+        reports_to="secretary",
+        handles="導入・定着・運用しやすさの点検とCS改善タスク起票",
+    ),
+    "compliance_auditor": RoleDef(
+        id="compliance_auditor",
+        title_ja="法務・合规（ミニ）",
+        layer="specialist",
+        reports_to="secretary",
+        handles="個人情報・労働法制・監査ログ等の最小合规点検",
+    ),
+    "test_auditor": RoleDef(
+        id="test_auditor",
+        title_ja="テスト監査",
+        layer="specialist",
+        reports_to="secretary",
+        handles="テストが緑でも正しいとは限らない前提で、テスト妥当性を監査し是正を起票",
+    ),
+    "quality_auditor": RoleDef(
+        id="quality_auditor",
+        title_ja="品質向上部",
+        layer="specialist",
+        reports_to="secretary",
+        handles="完成品の品質レビュー（本当にこれでよかったか／改善余地）",
+    ),
+    "sales": RoleDef(
+        id="sales",
+        title_ja="営業（軽量）",
+        layer="specialist",
+        reports_to="secretary",
+        handles="提案・デモ・価格メモなど売るための最小資料の起票",
+    ),
+    "maintenance": RoleDef(
+        id="maintenance",
+        title_ja="保守部（軽量）",
+        layer="specialist",
+        reports_to="secretary",
+        handles="保守費・永続運用のための手順／契約前提資料の起票",
+    ),
     "reviewer": RoleDef(
         id="reviewer",
         title_ja="レビュー",
         layer="specialist",
         reports_to="judge",
         handles="汎用レビュー",
+    ),
+    "it_operations": RoleDef(
+        id="it_operations",
+        title_ja="情報システム",
+        layer="worker",
+        reports_to="technical_director",
+        handles="権限・シード・運用手順・『動くが運用不能』の防止",
     ),
 }
 
@@ -185,6 +262,12 @@ def org_chart_text() -> str:
     lines.append("失敗時の基本ルート:")
     lines.append("  実行職 → 実装マネージャー（再計画）→ それでも駄目なら社長（人間）")
     lines.append("  検証専門職 → 判定 →（REJECT）実装側の修正／マネージャー再計画")
+    lines.append("完了前の自問ルート:")
+    lines.append(
+        "  実装キュー空 → 残件監査 → プロジェクト推進 → 商品企画 → "
+        "使い勝手 → CS → 情報システム → 法務合规 → テスト監査 → "
+        "品質向上部 → 営業 → 保守部 → リリース"
+    )
     return "\n".join(lines)
 
 

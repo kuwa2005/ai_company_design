@@ -32,3 +32,14 @@ staffing:
     security_reviewer: 2
     edge_case_reviewer: 2
     architecture_reviewer: 1
+    completeness_auditor: 1
+    usability_auditor: 1
+    quality_auditor: 1
+    project_coordinator: 1
+    product_planner: 1
+    customer_success: 1
+    compliance_auditor: 1
+    test_auditor: 1
+    it_operations: 1
+    sales: 1
+    maintenance: 1

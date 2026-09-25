@@ -13,4 +13,8 @@ cursor_runner:
   read_only_mode: ask
   supervisor_mode: plan
   model_by_role: {}
+  use_worktrees: false
+  require_evidence_match: true
+  # Non-interactive: trust the configured workspace (not --force/--yolo).
+  trust_workspace: true
   # workspace: null  # optional --workspace path

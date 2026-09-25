@@ -54,6 +54,33 @@
                               |             |
                               v             v
                             DONE        Fix Task -> Queue
+
+After implementation queue is empty (not yet release):
+
+  Completeness Auditor  ("本当にもう無いか？")
+           |
+           +-- GAPS --> new Implementation tasks --> ...
+           +-- CLEAR (repeat) --> Project Coordinator（プロジェクト推進）
+                                      |
+                                      +-- CLEAR --> Product Planner（商品企画）
+                                                      |
+                                                      +-- CLEAR --> Usability Auditor
+                                                                      |
+                                                                      +-- CLEAR --> Customer Success
+                                                                                      |
+                                                                                      +-- CLEAR --> IT Operations（情報システム）
+                                                                                                      |
+                                                                                                      +-- CLEAR --> Compliance（法務合规）
+                                                                                                                      |
+                                                                                                                      +-- CLEAR --> Test Auditor（テスト監査）
+                                                                                                                                      |
+                                                                                                                                      +-- CLEAR --> Quality Auditor（品質向上部）
+                                                                                                                                                      |
+                                                                                                                                                      +-- CLEAR --> Sales（営業・軽量）
+                                                                                                                                                                      |
+                                                                                                                                                                      +-- CLEAR --> Maintenance（保守部・軽量）
+                                                                                                                                                                                      |
+                                                                                                                                                                                      +-- CLEAR --> Release Candidate
 ```
 
 ## 2. コンポーネント

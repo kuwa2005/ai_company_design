@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -55,7 +56,17 @@ def is_judge_task(task: Task) -> bool:
     return task.kind == TaskKind.JUDGE or task.kind == "judge"
 
 
-def required_review_types(risk_level: str, config: AppConfig) -> list[str]:
+def required_review_types(
+    risk_level: str,
+    config: AppConfig,
+    *,
+    phase_gate: str | None = None,
+) -> list[str]:
+    """
+    Resolve review types from risk profile, optionally capped by phase gate (C-005).
+
+    critical risk always uses the full risk profile (never thinned by MVP gate).
+    """
     profile = config.validation.risk_profiles.get(risk_level)
     if profile is None:
         profile = config.validation.risk_profiles.get("medium")
@@ -63,7 +74,35 @@ def required_review_types(risk_level: str, config: AppConfig) -> list[str]:
         return ["test"]
     types = list(profile.required)
     cap = config.validation.max_reviewers_per_task
+
+    phase_key = phase_gate or getattr(config.validation, "default_phase_gate", None)
+    gates = getattr(config.validation, "phase_gates", None) or {}
+    if phase_key and risk_level != "critical" and phase_key in gates:
+        gate = gates[phase_key]
+        if not getattr(gate, "use_risk_profile", False) and gate.required:
+            gate_set = set(gate.required)
+            # Cap richer profiles down to the phase set; do not expand thinner ones (e.g. low).
+            if set(types) - gate_set:
+                types = list(gate.required)
+            else:
+                types = [t for t in types if t in gate_set]
     return types[:cap]
+
+
+def _phase_gate_for_task(session: Session, parent: Task, config: AppConfig) -> str | None:
+    """Map project delivery phase to a validation phase_gates key."""
+    if not parent.project_id:
+        return getattr(config.validation, "default_phase_gate", "mvp")
+    from ai_company.db.models import Project
+    from ai_company.services.secretary import project_delivery_phase
+
+    project = session.get(Project, parent.project_id)
+    phase = project_delivery_phase(session, project)
+    if phase in {"release_ready", "impl_done_closure_pending"}:
+        return "release"
+    if phase in {"implementing", "impl_queue_empty_closure_running"}:
+        return "implementing"
+    return getattr(config.validation, "default_phase_gate", "mvp")
 
 
 def start_validation_gate(
@@ -81,7 +120,10 @@ def start_validation_gate(
     if cfg.validation.coding_worker_can_self_approve:
         raise RuntimeError("coding_worker_can_self_approve must remain false")
 
-    review_types = required_review_types(parent.risk_level or "medium", cfg)
+    phase_key = _phase_gate_for_task(session, parent, cfg)
+    review_types = required_review_types(
+        parent.risk_level or "medium", cfg, phase_gate=phase_key
+    )
     plan = ValidationPlan(
         id=new_id("VPLAN"),
         task_id=parent.id,
@@ -328,7 +370,10 @@ def apply_judge_hard_rules(
 ) -> tuple[str, list[str], list[dict[str, Any]]]:
     """Code-side hard rules. Returns (verdict, reasons, conflicts)."""
     cfg = config or load_config()
-    ship_first = str(cfg.judge.delivery_mode or "ship_first").lower() == "ship_first"
+    ship_first = str(cfg.judge.delivery_mode or "strict").lower() in {
+        "ship_first",
+        "prototype",
+    }
     reasons: list[str] = []
     soft: list[str] = []
     results = list(
@@ -384,6 +429,94 @@ def apply_judge_hard_rules(
     elif not reasons:
         reasons.append("all_required_reviews_pass")
     return JudgeVerdict.PASS, reasons, conflicts
+
+
+def enqueue_ship_first_residuals(
+    session: Session,
+    *,
+    parent: Task,
+    reasons: list[str],
+    plan: ValidationPlan,
+    config: AppConfig | None = None,
+) -> list[Task]:
+    """Turn ship_first soft-passes into follow-up implementation backlog (C-003)."""
+    cfg = config or load_config()
+    ignored = [r for r in reasons if r.startswith("ship_first_ignored:")]
+    if not ignored:
+        return []
+
+    # Collect concrete findings from FAIL/UNCERTAIN reviews
+    findings_lines: list[str] = []
+    results = list(
+        session.scalars(
+            select(ValidationResult).where(ValidationResult.plan_id == plan.id)
+        ).all()
+    )
+    for r in results:
+        if r.verdict not in {ReviewVerdict.FAIL, ReviewVerdict.UNCERTAIN}:
+            continue
+        findings_lines.append(f"[{r.review_type}] verdict={r.verdict}")
+        for f in r.findings or []:
+            if isinstance(f, dict):
+                findings_lines.append(
+                    f"  - {f.get('severity', '?')}: {f.get('description', f)}"
+                )
+            else:
+                findings_lines.append(f"  - {f}")
+
+    body = "\n".join(findings_lines) or "\n".join(ignored)
+    title = f"残件(ship_first): {parent.title}"[:200]
+    # Avoid duplicate open residual for same parent
+    existing = session.scalars(
+        select(Task).where(
+            Task.parent_task_id == parent.id,
+            Task.title == title,
+            Task.status.in_(
+                (
+                    TaskStatus.BACKLOG,
+                    TaskStatus.READY,
+                    TaskStatus.WAITING,
+                    TaskStatus.RUNNING,
+                )
+            ),
+        )
+    ).first()
+    if existing is not None:
+        return [existing]
+
+    residual = create_task(
+        session,
+        title=title,
+        priority=max(parent.priority - 5, 10),
+        project_id=parent.project_id,
+        objective=(
+            "ship_first で一時通過した検証指摘を解消する。\n"
+            f"親タスク: {parent.id}\n"
+            f"無視理由: {ignored}\n"
+            f"指摘:\n{body}"
+        ),
+        role_required="coding_worker",
+        estimated_cost=parent.estimated_cost,
+        parent_task_id=parent.id,
+        kind=TaskKind.IMPLEMENTATION,
+        risk_level=parent.risk_level or "medium",
+        acceptance_criteria="無視された検証 FAIL/UNCERTAIN が再検証で PASS になる",
+        config=cfg,
+    )
+    record_audit(
+        session,
+        event_type="ship_first_residual_enqueued",
+        actor_type="system",
+        actor_id="judge",
+        target_type="task",
+        target_id=residual.id,
+        metadata={
+            "parent": parent.id,
+            "ignored": ignored,
+            "plan_id": plan.id,
+        },
+    )
+    return [residual]
 
 
 def finalize_judge(
@@ -459,6 +592,65 @@ def finalize_judge(
     if verdict == JudgeVerdict.PASS:
         parent.status = TaskStatus.DONE
         session.flush()
+        # Integrate worktree branch when coding ran in isolation (P0-4)
+        try:
+            from ai_company.db.models import Execution
+            from ai_company.services.worktree import (
+                WorktreeInfo,
+                merge_worktree_branch,
+            )
+
+            src_exec = (
+                session.get(Execution, plan.source_execution_id)
+                if plan.source_execution_id
+                else None
+            )
+            if src_exec and src_exec.worktree_path:
+                safe_id = "".join(
+                    c if c.isalnum() or c in "-_" else "_" for c in parent.id
+                )[:48]
+                info = WorktreeInfo(
+                    path=Path(src_exec.worktree_path),
+                    branch=f"ai-company/{safe_id}",
+                    base_ref=src_exec.base_commit or "HEAD",
+                    task_id=parent.id,
+                )
+                merged = merge_worktree_branch(info)
+                record_audit(
+                    session,
+                    event_type="worktree_merge",
+                    actor_type="system",
+                    actor_id="judge",
+                    target_type="task",
+                    target_id=parent.id,
+                    metadata={
+                        "ok": merged,
+                        "worktree": src_exec.worktree_path,
+                        "base_commit": src_exec.base_commit,
+                    },
+                )
+                if not merged:
+                    # Do not silently ship conflicting changes
+                    reasons = list(reasons) + ["worktree_merge_conflict"]
+                    # Leave parent DONE but surface repair via residual
+                    from ai_company.services.tasks import create_task as _ct
+
+                    _ct(
+                        session,
+                        title=f"worktree競合解消: {parent.title}"[:200],
+                        priority=max(parent.priority - 5, 10),
+                        project_id=parent.project_id,
+                        objective=(
+                            "Judge PASS 後の worktree merge が衝突した。"
+                            "手動/再実装で統合する。"
+                        ),
+                        role_required="coding_worker",
+                        kind=TaskKind.IMPLEMENTATION,
+                        risk_level=parent.risk_level or "medium",
+                        config=cfg,
+                    )
+        except Exception:
+            pass
         record_audit(
             session,
             event_type="task_completed",
@@ -466,7 +658,15 @@ def finalize_judge(
             actor_id="judge",
             target_type="task",
             target_id=parent.id,
-            metadata={"via": "judge_pass", "decision_id": decision.id},
+            metadata={"via": "judge_pass", "decision_id": decision.id, "reasons": reasons},
+        )
+        # C-003: soft-passed / ignored findings become residual implementation work
+        enqueue_ship_first_residuals(
+            session,
+            parent=parent,
+            reasons=reasons,
+            plan=plan,
+            config=cfg,
         )
         refresh_dependents(session, parent.id)
     elif verdict == JudgeVerdict.REJECT:
@@ -483,7 +683,7 @@ def finalize_judge(
             getattr(cfg.repair_loop, "fire_after_non_security_rejects", 2) or 2
         )
         should_fire = (
-            getattr(cfg.repair_loop, "auto_fire_stubborn_supervisor", True)
+            getattr(cfg.repair_loop, "auto_fire_stubborn_supervisor", False)
             and reasons_are_fireable(reasons)
             and (
                 stubborn_n >= threshold
@@ -577,6 +777,20 @@ def validation_status(session: Session, task_id: str) -> dict[str, Any]:
                 select(JudgeDecision).where(JudgeDecision.plan_id == plan.id)
             ).all()
         )
+    ignored: list[str] = []
+    for d in decisions:
+        for r in d.reasons or []:
+            if str(r).startswith("ship_first_ignored:"):
+                ignored.append(str(r))
+    residuals: list[str] = []
+    parent_id = plan.task_id if plan else task.id
+    for t in session.scalars(
+        select(Task).where(
+            Task.parent_task_id == parent_id,
+            Task.title.like("残件(ship_first):%"),
+        )
+    ).all():
+        residuals.append(f"{t.id}:{t.status}")
     return {
         "task_id": task.id,
         "task_status": task.status,
@@ -600,4 +814,6 @@ def validation_status(session: Session, task_id: str) -> dict[str, Any]:
         "judge": [
             {"id": d.id, "verdict": d.verdict, "reasons": d.reasons} for d in decisions
         ],
+        "ship_first_ignored": ignored,
+        "ship_first_residuals": residuals,
     }

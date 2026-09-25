@@ -24,6 +24,13 @@ _HARD_MARKERS = (
     "circuit",
     "monthly_hard",
     "project_hard",
+    "data_destruction",
+    "auth_fail",
+    "payment",
+    "production",
+    "credential",
+    "pii_leak",
+    "test_deleted",
 )
 
 _OPEN_STATUSES = {
@@ -105,7 +112,7 @@ def fire_stubborn_supervisor(
 
     Security / critical / policy failures must not use this path.
     """
-    _ = config or load_config()
+    cfg = config or load_config()
     root = _root_implementation_task(session, task)
     role_label = format_role_label(fired_role or "engineering_manager")
 
@@ -117,7 +124,6 @@ def fire_stubborn_supervisor(
             child.status = TaskStatus.CANCELLED
             cancelled.append(child.id)
 
-    # Close any pending human approvals tied to this task
     from ai_company.services.secretary import _task_id_from_reason
 
     closed_approvals: list[str] = []
@@ -133,6 +139,34 @@ def fire_stubborn_supervisor(
     root.status = TaskStatus.DONE
     session.flush()
     refresh_dependents(session, root.id)
+
+    residual_id: str | None = None
+    try:
+        from ai_company.services.tasks import create_task as _create_task
+
+        residual = _create_task(
+            session,
+            title=f"解雇引き継ぎ残件: {root.title}"[:200],
+            priority=max(root.priority - 5, 10),
+            project_id=root.project_id,
+            objective=(
+                "わからず屋上司を解雇して前進した。正当指摘の可能性が残るため追跡する。\n"
+                f"解雇理由: {reason}\n"
+                f"親: {root.id}"
+            ),
+            role_required="coding_worker",
+            estimated_cost=root.estimated_cost,
+            parent_task_id=None,
+            kind=TaskKind.IMPLEMENTATION,
+            risk_level=root.risk_level or "medium",
+            acceptance_criteria=(
+                "解雇時に握りつぶした非セキュリティ指摘の要否を再判定し必要な修正を入れる"
+            ),
+            config=cfg,
+        )
+        residual_id = residual.id
+    except Exception:
+        residual_id = None
 
     progress(
         f"解雇  {role_label} を途中解雇 → 出荷優先で完了  "
@@ -150,6 +184,7 @@ def fire_stubborn_supervisor(
             "fired_role": fired_role or "stubborn_supervisor",
             "cancelled_children": cancelled,
             "closed_approvals": closed_approvals,
+            "residual_task_id": residual_id,
             "via": "dismissal",
         },
     )
@@ -175,14 +210,13 @@ def maybe_auto_fire(
 ) -> Task | None:
     """If config allows and reason is pedantic, fire and return root; else None."""
     cfg = config or load_config()
-    if not getattr(cfg.repair_loop, "auto_fire_stubborn_supervisor", True):
+    if not getattr(cfg.repair_loop, "auto_fire_stubborn_supervisor", False):
         return None
     if not reasons_are_fireable(reason):
         return None
     root = _root_implementation_task(session, task)
     threshold = int(getattr(cfg.repair_loop, "fire_after_non_security_rejects", 2) or 2)
     stubborn_n = count_stubborn_rejects(session, root.id)
-    # Already at/over threshold, or reason says managers exhausted pedantry
     lower = reason.lower()
     exhausted = "manager_exhausted" in lower or "repair_loop_max_cycles" in lower
     if stubborn_n >= threshold or exhausted:

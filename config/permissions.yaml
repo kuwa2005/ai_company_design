@@ -48,7 +48,77 @@ profiles:
       - security.scan.safe
       - validation.report
 
+  completeness_auditor:
+    permissions:
+      - code.read
+      - task.create
+      - validation.read
+      - project.report
+  usability_auditor:
+    permissions:
+      - code.read
+      - task.create
+      - validation.read
+      - project.report
+  quality_auditor:
+    permissions:
+      - code.read
+      - task.create
+      - validation.read
+      - project.report
+  project_coordinator:
+    permissions:
+      - code.read
+      - task.create
+      - task.prioritize
+      - staffing.request
+      - project.report
+  product_planner:
+    permissions:
+      - code.read
+      - task.create
+      - validation.read
+      - project.report
+  customer_success:
+    permissions:
+      - code.read
+      - task.create
+      - validation.read
+      - project.report
+  compliance_auditor:
+    permissions:
+      - code.read
+      - task.create
+      - validation.read
+      - security.scan.safe
+      - project.report
+  test_auditor:
+    permissions:
+      - code.read
+      - test.execute
+      - task.create
+      - validation.read
+      - project.report
+  it_operations:
+    permissions:
+      - code.read
+      - code.edit
+      - task.create
+      - shell.safe
+      - project.report
+  sales:
+    permissions:
+      - code.read
+      - task.create
+      - project.report
+  maintenance:
+    permissions:
+      - code.read
+      - task.create
+      - project.report
+
   judge:
     permissions:
+      - code.read
       - validation.read
       - judge.decide

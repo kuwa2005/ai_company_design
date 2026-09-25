@@ -49,10 +49,14 @@ def _implementation_tasks(session: Session, project_id: str) -> list[Task]:
 
 
 def _project_complete(session: Session, project_id: str) -> bool:
-    tasks = _implementation_tasks(session, project_id)
-    if not tasks:
+    from ai_company.services.closure_loops import (
+        all_implementation_done,
+        closure_loops_finished,
+    )
+
+    if not all_implementation_done(session, project_id):
         return False
-    return all(t.status == TaskStatus.DONE for t in tasks)
+    return closure_loops_finished(session, project_id)
 
 
 def _has_blocking_exception(session: Session, project_id: str) -> bool:
@@ -94,15 +98,96 @@ def _idle(session: Session, project_id: str) -> bool:
 def create_release_candidate(
     session: Session, *, project: Project
 ) -> Artifact:
+    from ai_company.config import load_config
+    from ai_company.services.closure_loops import CLOSURE_KINDS, closure_loops_finished
+    from ai_company.services.policy import policy_snapshot
+    from ai_company.services.secretary import project_delivery_phase
+
     out_dir = executions_dir() / "release_candidates"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{project.id}.md"
     summary = human_summary(session, project_id=project.id)
     digest = exception_digest(session, project_id=project.id)
+    cfg = load_config()
+    phase = project_delivery_phase(session, project)
+    closure_ok = closure_loops_finished(session, project.id, config=cfg)
+    closure_rows = list(
+        session.scalars(
+            select(Task).where(
+                Task.project_id == project.id,
+                Task.kind.in_(tuple(CLOSURE_KINDS)),
+            )
+        ).all()
+    )
+    clear_list = [
+        f"- [{t.status}] {t.kind}: {t.title}"
+        for t in closure_rows
+        if t.status == TaskStatus.DONE
+    ]
+    demo_tasks = list(
+        session.scalars(
+            select(Task).where(
+                Task.project_id == project.id,
+                Task.title.like("%デモ%"),
+            )
+        ).all()
+    )
+    demo_ok = bool(demo_tasks) and all(t.status == TaskStatus.DONE for t in demo_tasks)
+    phase_mark = "[x]" if phase == "release_ready" else "[ ]"
+    checklist = [
+        f"- {phase_mark} 進行フェーズ: {phase}",
+        f"- {'[x]' if closure_ok else '[ ]'} 自問ループ完了",
+        f"- [x] 出荷ポリシー: {policy_snapshot(cfg)}",
+        f"- {'[x]' if demo_ok else '[ ]'} 管理者デモシナリオ通過"
+        + (f"（{len(demo_tasks)} tasks）" if demo_tasks else "（デモタスク未作成）"),
+        "- [ ] 営業／保守資料パス（あれば）",
+    ]
+    # Attach recent validation evidence paths / execution ids
+    from ai_company.db.models import Execution, ValidationResult
+
+    evidence_lines: list[str] = []
+    for vr in session.scalars(
+        select(ValidationResult)
+        .join(Task, Task.id == ValidationResult.task_id)
+        .where(Task.project_id == project.id)
+        .limit(30)
+    ).all():
+        n_findings = len(vr.findings or [])
+        evidence_lines.append(
+            f"- {vr.review_type}:{vr.verdict} exec={vr.execution_id} "
+            f"findings={n_findings}"
+        )
+    execs = list(
+        session.scalars(
+            select(Execution)
+            .join(Task, Task.id == Execution.task_id)
+            .where(Task.project_id == project.id)
+            .order_by(Execution.started_at.desc())
+            .limit(10)
+        ).all()
+    )
+    commit_lines = []
+    for e in execs:
+        rj = e.result_json or {}
+        if rj.get("commit"):
+            commit_lines.append(f"- {e.id}: {rj.get('commit')}")
+        ev = rj.get("evidence") or {}
+        if isinstance(ev, dict) and ev.get("baseline_ref"):
+            commit_lines.append(f"- {e.id} baseline={ev.get('baseline_ref')}")
     body = (
         f"# Release Candidate\n\n"
         f"Project: {project.id} — {project.name}\n\n"
         f"Goal: {project.goal}\n\n"
+        f"## Checklist\n\n" + "\n".join(checklist) + "\n\n"
+        "## Closure CLEAR\n\n"
+        + ("\n".join(clear_list) if clear_list else "(none)")
+        + "\n\n"
+        "## Validation Evidence\n\n"
+        + ("\n".join(evidence_lines) if evidence_lines else "(none)")
+        + "\n\n"
+        "## Commits / baselines\n\n"
+        + ("\n".join(commit_lines) if commit_lines else "(none)")
+        + "\n\n"
         f"## Summary\n\n{summary}\n\n"
         f"## Exceptions\n\n{digest}\n"
     )
@@ -113,7 +198,13 @@ def create_release_candidate(
         task_id=None,
         kind="release_candidate",
         path=str(path),
-        metadata_json={"goal": project.goal},
+        metadata_json={
+            "goal": project.goal,
+            "phase": phase,
+            "closure_finished": closure_ok,
+            "policy": policy_snapshot(cfg),
+            "checklist": checklist,
+        },
     )
     session.add(art)
     session.flush()
@@ -124,7 +215,7 @@ def create_release_candidate(
         actor_id="autonomous",
         target_type="artifact",
         target_id=art.id,
-        metadata={"project_id": project.id, "path": str(path)},
+        metadata={"project_id": project.id, "path": str(path), "phase": phase},
     )
     return art
 

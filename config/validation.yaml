@@ -1,6 +1,7 @@
 validation:
   enabled: true
 
+  # C-005: prefer risk_level=low (test only) during MVP; raise for release.
   max_reviewers_per_task: 5
   max_parallel_reviewers_per_task: 2
 
@@ -29,19 +30,73 @@ validation:
         - edge_case
         - architecture
 
+  # C-005: MVP/implementing use a thin gate; release uses full risk_profiles.
+  default_phase_gate: mvp
+  phase_gates:
+    mvp:
+      required:
+        - test
+        - security
+    implementing:
+      required:
+        - test
+        - security
+    release:
+      use_risk_profile: true
+      required: []
+
 judge:
   required: true
   critical_finding_blocks_pass: true
   security_fail_blocks_pass: true
   missing_required_review_blocks_pass: true
-  # ship_first: security FAIL / critical 以外の検証 FAIL では止めない（まず動くものを出す）
-  # strict: 従来どおり全 required review の FAIL で REJECT
-  delivery_mode: ship_first
+  # Default is safe: FAIL/UNCERTAIN block. Use --delivery-mode ship_first / prototype for demos.
+  delivery_mode: strict
+  # Optional alias profile recorded on decisions: strict | balanced | prototype
+  release_policy: strict
 
 repair_loop:
   max_cycles: 3
   max_total_worker_runs: 12
   manager_max_replans: 2
-  # わからず屋の検証／上司: セキュリティ以外で拒否が続いたら途中解雇→出荷
-  auto_fire_stubborn_supervisor: true
+  # Default off: do not auto-fire supervisors to force shipment
+  auto_fire_stubborn_supervisor: false
   fire_after_non_security_rejects: 2
+
+# 実装キューが空になった後も、ゴール完了とみなす前に執拗に自問する
+closure_loops:
+  enabled: true
+  skip_phases: []
+  still_needed:
+    max_rounds: 3
+    consecutive_clear_to_advance: 2
+  project_health:
+    max_rounds: 1
+    consecutive_clear_to_advance: 1
+  product_fit:
+    max_rounds: 1
+    consecutive_clear_to_advance: 1
+  usability:
+    max_rounds: 2
+    consecutive_clear_to_advance: 1
+  customer_success:
+    max_rounds: 1
+    consecutive_clear_to_advance: 1
+  it_operations:
+    max_rounds: 1
+    consecutive_clear_to_advance: 1
+  compliance:
+    max_rounds: 1
+    consecutive_clear_to_advance: 1
+  test_audit:
+    max_rounds: 1
+    consecutive_clear_to_advance: 1
+  quality:
+    max_rounds: 2
+    consecutive_clear_to_advance: 1
+  sales:
+    max_rounds: 1
+    consecutive_clear_to_advance: 1
+  maintenance:
+    max_rounds: 1
+    consecutive_clear_to_advance: 1

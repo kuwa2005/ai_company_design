@@ -25,6 +25,17 @@ class TaskKind(StrEnum):
     JUDGE = "judge"
     REPAIR = "repair"
     REPLAN = "replan"
+    STILL_NEEDED = "still_needed"
+    PROJECT_HEALTH = "project_health"
+    PRODUCT_FIT = "product_fit"
+    USABILITY_AUDIT = "usability_audit"
+    CUSTOMER_SUCCESS = "customer_success"
+    IT_OPS_AUDIT = "it_ops_audit"
+    COMPLIANCE_AUDIT = "compliance_audit"
+    TEST_AUDIT = "test_audit"
+    QUALITY_AUDIT = "quality_audit"
+    SALES_AUDIT = "sales_audit"
+    MAINTENANCE_AUDIT = "maintenance_audit"
 
 
 class WorkerStatus(StrEnum):

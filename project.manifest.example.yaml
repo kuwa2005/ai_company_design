@@ -1,0 +1,8 @@
+# Example project manifest (copy into a product repo as project.manifest.yaml)
+name: example
+test_command: ["pytest", "-q"]
+lint_command: ["ruff", "check", "."]
+forbidden_paths:
+  - ".env"
+  - "secrets/"
+demo_command: []

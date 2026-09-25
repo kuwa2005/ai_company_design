@@ -10,7 +10,7 @@ from rich.table import Table
 
 from ai_company.config import clear_config_cache, load_config
 from ai_company.db import init_db, reset_engine, session_scope
-from ai_company.paths import audit_log_path, data_dir, db_path, executions_dir
+from ai_company.paths import data_dir, db_path, executions_dir
 from ai_company.roles import org_chart_text
 from ai_company.services.approval_flow import (
     run_interactive_approval_session,
@@ -63,6 +63,35 @@ app.add_typer(approval_app, name="approval")
 console = Console()
 
 
+def _apply_delivery_mode_override(mode: str) -> None:
+    """Patch validation.yaml in the active config dir for this process."""
+    import yaml
+
+    from ai_company.paths import config_dir
+
+    mode_l = mode.strip().lower()
+    if mode_l not in {"strict", "ship_first", "prototype", "balanced"}:
+        raise typer.BadParameter("delivery-mode must be strict|ship_first|prototype|balanced")
+    path = config_dir() / "validation.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    judge = data.setdefault("judge", {})
+    repair = data.setdefault("repair_loop", {})
+    if mode_l in {"ship_first", "prototype"}:
+        judge["delivery_mode"] = "ship_first"
+        judge["release_policy"] = "prototype"
+        repair["auto_fire_stubborn_supervisor"] = mode_l == "prototype"
+    elif mode_l == "balanced":
+        judge["delivery_mode"] = "strict"
+        judge["release_policy"] = "balanced"
+        repair["auto_fire_stubborn_supervisor"] = False
+    else:
+        judge["delivery_mode"] = "strict"
+        judge["release_policy"] = "strict"
+        repair["auto_fire_stubborn_supervisor"] = False
+    path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    clear_config_cache()
+
+
 def ensure_runtime_ready() -> None:
     """Create local data/DB if missing so `start` works without a prior `init`."""
     clear_config_cache()
@@ -78,12 +107,69 @@ def init_cmd() -> None:
     ensure_runtime_ready()
     cfg = load_config()
     console.print(f"[green]Initialized[/green] project: {Path.cwd().resolve()}")
-    console.print(f"data dir: {data_dir()}")
+    console.print(f"Data dir: {data_dir()}")
     console.print(f"DB: {db_path()}")
-    console.print(f"Audit log: {audit_log_path()}")
-    console.print(
-        f"Scheduler max_concurrent_workers={cfg.settings.scheduler.max_concurrent_workers}"
-    )
+    console.print(f"delivery_mode: {cfg.judge.delivery_mode}")
+
+
+@app.command("doctor")
+def doctor_cmd(
+    workspace: str | None = typer.Option(
+        None, "--workspace", help="Workspace to diagnose (default: cwd)"
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Machine-readable JSON"),
+) -> None:
+    """Side-effect free preflight checks (PASS/WARN/FAIL + fix hints)."""
+    from ai_company.services.doctor import report_to_dict, run_doctor
+
+    ws = Path(workspace).resolve() if workspace else Path.cwd()
+    report = run_doctor(workspace=ws)
+    if json_out:
+        import json
+
+        console.print_json(json.dumps(report_to_dict(report), ensure_ascii=False))
+    else:
+        table = Table(title="ai-company doctor")
+        table.add_column("Check")
+        table.add_column("Status")
+        table.add_column("Detail")
+        table.add_column("Fix")
+        for c in report.checks:
+            color = {"PASS": "green", "WARN": "yellow", "FAIL": "red"}.get(c.status, "white")
+            table.add_row(c.name, f"[{color}]{c.status}[/{color}]", c.detail, c.fix or "")
+        console.print(table)
+        if report.ok:
+            console.print("[green]doctor: OK (no FAIL)[/green]")
+        else:
+            console.print("[red]doctor: FAIL — fix items above before live Cursor runs[/red]")
+            raise typer.Exit(code=1)
+
+
+@app.command("db-backup")
+def db_backup_cmd(
+    dest_dir: str | None = typer.Option(
+        None, "--dest-dir", help="Backup directory (default: data/backups)"
+    ),
+) -> None:
+    """Copy SQLite DB to a timestamped backup (safe under WAL)."""
+    from ai_company.services.db_backup import backup_sqlite
+
+    path = backup_sqlite(dest_dir=Path(dest_dir) if dest_dir else None)
+    console.print(f"[green]backup[/green] {path}")
+
+
+@app.command("db-restore")
+def db_restore_cmd(
+    backup: str = typer.Argument(..., help="Path to backup .db file"),
+    yes: bool = typer.Option(False, "--yes", help="Confirm overwrite of live DB"),
+) -> None:
+    """Restore SQLite DB from a backup file (overwrites live DB)."""
+    from ai_company.services.db_backup import restore_sqlite
+
+    if not yes:
+        raise typer.BadParameter("Refusing to overwrite without --yes")
+    path = restore_sqlite(Path(backup))
+    console.print(f"[yellow]restored[/yellow] {path}")
 
 
 @app.command("start")
@@ -104,10 +190,17 @@ def start_cmd(
     quiet: bool = typer.Option(
         False, "--quiet", help="Disable live progress lines on stderr"
     ),
+    delivery_mode: str | None = typer.Option(
+        None,
+        "--delivery-mode",
+        help="strict | ship_first | prototype | balanced",
+    ),
 ) -> None:
     """Secretary plans Tasks + Staffing Requests. Never spawns workers itself."""
     if runner not in {"mock", "cursor"}:
         raise typer.BadParameter("runner must be 'mock' or 'cursor'")
+    if delivery_mode is not None:
+        _apply_delivery_mode_override(delivery_mode)
     ensure_runtime_ready()
     from ai_company.services.progress import set_progress
     from ai_company.ui_ja import role_ja, runner_ja, status_ja

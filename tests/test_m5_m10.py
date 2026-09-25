@@ -38,8 +38,10 @@ def test_m6_risk_and_validation_proposal(db_session: Session, tmp_env: Path) -> 
     result = start_goal(db_session, "優秀なWeb勤怠を作って")
     assert result.validation_requests
     assert all(t.risk_level for t in result.tasks)
-    assert any(t.title.startswith("PRD") for t in result.tasks)
-    assert any("アーキテクチャ" in t.title for t in result.tasks)
+    titles = [t.title for t in result.tasks]
+    assert any("Goal分解" in t or t.startswith("PRD") for t in titles)
+    assert any("デモ" in t or "E2E" in t for t in titles)
+    assert any("アーキテクチャ" in t for t in titles)
     events = {e.event_type for e in db_session.scalars(select(AuditEvent)).all()}
     assert "validation_request_proposed" in events
     assert "ワーカーを直接起動しません" in result.summary
@@ -201,7 +203,35 @@ def test_m10_autonomous_nolook_flow(db_session: Session, tmp_env: Path) -> None:
                 "reviewer": 8,
                 "test_reviewer": 4,
                 "judge": 4,
+                "completeness_auditor": 2,
+                "project_coordinator": 2,
+                "product_planner": 2,
+                "usability_auditor": 2,
+                "customer_success": 2,
+                "it_operations": 2,
+                "compliance_auditor": 2,
+                "test_auditor": 2,
+                "quality_auditor": 2,
+                "sales": 2,
+                "maintenance": 2,
             },
+        },
+    )
+    write_validation_override(
+        tmp_env,
+        closure_loops={
+            "enabled": True,
+            "still_needed": {"max_rounds": 1, "consecutive_clear_to_advance": 1},
+            "project_health": {"max_rounds": 1, "consecutive_clear_to_advance": 1},
+            "product_fit": {"max_rounds": 1, "consecutive_clear_to_advance": 1},
+            "usability": {"max_rounds": 1, "consecutive_clear_to_advance": 1},
+            "customer_success": {"max_rounds": 1, "consecutive_clear_to_advance": 1},
+            "it_operations": {"max_rounds": 1, "consecutive_clear_to_advance": 1},
+            "compliance": {"max_rounds": 1, "consecutive_clear_to_advance": 1},
+            "test_audit": {"max_rounds": 1, "consecutive_clear_to_advance": 1},
+            "quality": {"max_rounds": 1, "consecutive_clear_to_advance": 1},
+            "sales": {"max_rounds": 1, "consecutive_clear_to_advance": 1},
+            "maintenance": {"max_rounds": 1, "consecutive_clear_to_advance": 1},
         },
     )
     clear_config_cache()
@@ -210,7 +240,7 @@ def test_m10_autonomous_nolook_flow(db_session: Session, tmp_env: Path) -> None:
     auto = run_autonomous(
         db_session,
         project_id=result.project.id,
-        max_cycles=60,
+        max_cycles=160,
         runner="mock",
         mock_succeed=True,
     )

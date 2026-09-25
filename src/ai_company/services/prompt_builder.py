@@ -36,6 +36,17 @@ def load_role_prompt(role: str) -> str:
         "secretary": "secretary.md",
         "engineering_manager": "supervisor.md",
         "technical_director": "supervisor.md",
+        "completeness_auditor": "completeness_auditor.md",
+        "usability_auditor": "usability_auditor.md",
+        "quality_auditor": "quality_auditor.md",
+        "project_coordinator": "project_coordinator.md",
+        "product_planner": "product_planner.md",
+        "customer_success": "customer_success.md",
+        "compliance_auditor": "compliance_auditor.md",
+        "test_auditor": "test_auditor.md",
+        "it_operations": "it_operations.md",
+        "sales": "sales.md",
+        "maintenance": "maintenance.md",
     }
     name = mapping.get(role, "coding_worker.md")
     path = prompts_dir() / name

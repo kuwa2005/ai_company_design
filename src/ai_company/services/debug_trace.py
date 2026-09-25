@@ -225,6 +225,32 @@ def stuck_trace(session: Session, *, project_id: str | None = None) -> str:
     if not blocked and not pending and not failed:
         lines.append("（停止タスクも未承認も失敗中もなし）")
 
+    # C-008: ship_first soft-passes and residual handoff
+    from ai_company.db.models import JudgeDecision
+
+    ignored_rows: list[str] = []
+    dec_stmt = select(JudgeDecision).order_by(JudgeDecision.created_at.desc()).limit(20)
+    for d in session.scalars(dec_stmt).all():
+        for r in d.reasons or []:
+            if str(r).startswith("ship_first_ignored:"):
+                ignored_rows.append(f"{d.plan_id}:{r}")
+    residual_stmt = select(Task).where(Task.title.like("残件(ship_first):%")).limit(20)
+    if project_id:
+        residual_stmt = residual_stmt.where(Task.project_id == project_id)
+    residuals = list(session.scalars(residual_stmt).all())
+    lines.append("")
+    lines.append("【ship_first 無視FINDING → 残件】(C-008)")
+    if ignored_rows:
+        for row in ignored_rows[:15]:
+            lines.append(f"- ignored {row}")
+    else:
+        lines.append("- （無視された finding なし）")
+    if residuals:
+        for t in residuals:
+            lines.append(f"- residual {t.id} [{t.status}] {t.title}")
+    else:
+        lines.append("- （残件タスクなし）")
+
     lines.append("")
     lines.append("--- ロール定義（抜粋）---")
     # Keep org chart available but truncated in stuck dump

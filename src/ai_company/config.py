@@ -112,6 +112,12 @@ class CursorRunnerConfig(BaseModel):
     read_only_mode: str = "ask"
     supervisor_mode: str = "plan"
     model_by_role: dict[str, str] = Field(default_factory=dict)
+    # Isolate coding workers in git worktrees (requires git workspace)
+    use_worktrees: bool = False
+    # Fail coding runs when changed_files mismatch git (needs baseline HEAD)
+    require_evidence_match: bool = True
+    # Non-interactive workspace trust (--trust). Not the same as --force/--yolo.
+    trust_workspace: bool = True
 
 
 class CursorRunnerFile(BaseModel):
@@ -122,6 +128,14 @@ class RiskProfile(BaseModel):
     required: list[str] = Field(default_factory=list)
 
 
+class PhaseGateProfile(BaseModel):
+    """C-005: lighter review sets for early phases; full risk_profiles at release."""
+
+    required: list[str] = Field(default_factory=list)
+    # When true, ignore this override and use risk_profiles only
+    use_risk_profile: bool = False
+
+
 class ValidationSection(BaseModel):
     enabled: bool = True
     max_reviewers_per_task: int = 5
@@ -129,6 +143,10 @@ class ValidationSection(BaseModel):
     require_independent_execution: bool = True
     coding_worker_can_self_approve: bool = False
     risk_profiles: dict[str, RiskProfile] = Field(default_factory=dict)
+    # Phase -> gate override (mvp / implementing / release)
+    phase_gates: dict[str, PhaseGateProfile] = Field(default_factory=dict)
+    # Default phase key when project phase is early
+    default_phase_gate: str = "mvp"
 
 
 class JudgeSection(BaseModel):
@@ -136,9 +154,11 @@ class JudgeSection(BaseModel):
     critical_finding_blocks_pass: bool = True
     security_fail_blocks_pass: bool = True
     missing_required_review_blocks_pass: bool = True
-    # ship_first: only security FAIL + critical findings block delivery
-    # strict: any required review FAIL rejects (legacy perfectionist mode)
-    delivery_mode: str = "ship_first"
+    # strict (default): any required review FAIL rejects
+    # ship_first / prototype: only security FAIL + critical findings block delivery
+    delivery_mode: str = "strict"
+    # Recorded policy name: strict | balanced | prototype
+    release_policy: str = "strict"
 
 
 class RepairLoopSection(BaseModel):
@@ -148,14 +168,63 @@ class RepairLoopSection(BaseModel):
     # this many times before escalating to the human owner.
     manager_max_replans: int = 2
     # Fire pedantic supervisors mid-process (non-security) and mark work DONE.
-    auto_fire_stubborn_supervisor: bool = True
+    # Default false — must be explicitly enabled (prototype / CLI).
+    auto_fire_stubborn_supervisor: bool = False
     fire_after_non_security_rejects: int = 2
+
+
+class ClosureLoopPhase(BaseModel):
+    max_rounds: int = 3
+    # Advance to next phase after this many consecutive CLEAR verdicts
+    consecutive_clear_to_advance: int = 1
+
+
+class ClosureLoopsSection(BaseModel):
+    """Post-implementation self-questioning before declaring the goal done."""
+
+    enabled: bool = True
+    # C-010: omit phases by key (e.g. sales, maintenance for internal tools)
+    skip_phases: list[str] = Field(default_factory=list)
+    still_needed: ClosureLoopPhase = Field(
+        default_factory=lambda: ClosureLoopPhase(max_rounds=3, consecutive_clear_to_advance=2)
+    )
+    project_health: ClosureLoopPhase = Field(
+        default_factory=lambda: ClosureLoopPhase(max_rounds=1, consecutive_clear_to_advance=1)
+    )
+    product_fit: ClosureLoopPhase = Field(
+        default_factory=lambda: ClosureLoopPhase(max_rounds=1, consecutive_clear_to_advance=1)
+    )
+    usability: ClosureLoopPhase = Field(
+        default_factory=lambda: ClosureLoopPhase(max_rounds=2, consecutive_clear_to_advance=1)
+    )
+    customer_success: ClosureLoopPhase = Field(
+        default_factory=lambda: ClosureLoopPhase(max_rounds=1, consecutive_clear_to_advance=1)
+    )
+    it_operations: ClosureLoopPhase = Field(
+        default_factory=lambda: ClosureLoopPhase(max_rounds=1, consecutive_clear_to_advance=1)
+    )
+    compliance: ClosureLoopPhase = Field(
+        default_factory=lambda: ClosureLoopPhase(max_rounds=1, consecutive_clear_to_advance=1)
+    )
+    test_audit: ClosureLoopPhase = Field(
+        default_factory=lambda: ClosureLoopPhase(max_rounds=1, consecutive_clear_to_advance=1)
+    )
+    quality: ClosureLoopPhase = Field(
+        default_factory=lambda: ClosureLoopPhase(max_rounds=2, consecutive_clear_to_advance=1)
+    )
+    sales: ClosureLoopPhase = Field(
+        default_factory=lambda: ClosureLoopPhase(max_rounds=1, consecutive_clear_to_advance=1)
+    )
+    maintenance: ClosureLoopPhase = Field(
+        default_factory=lambda: ClosureLoopPhase(max_rounds=1, consecutive_clear_to_advance=1)
+    )
 
 
 class ValidationFile(BaseModel):
     validation: ValidationSection = Field(default_factory=ValidationSection)
     judge: JudgeSection = Field(default_factory=JudgeSection)
     repair_loop: RepairLoopSection = Field(default_factory=RepairLoopSection)
+    closure_loops: ClosureLoopsSection = Field(default_factory=ClosureLoopsSection)
 
 
 class AppConfig(BaseModel):
@@ -166,6 +235,7 @@ class AppConfig(BaseModel):
     validation: ValidationSection = Field(default_factory=ValidationSection)
     judge: JudgeSection = Field(default_factory=JudgeSection)
     repair_loop: RepairLoopSection = Field(default_factory=RepairLoopSection)
+    closure_loops: ClosureLoopsSection = Field(default_factory=ClosureLoopsSection)
 
     @property
     def default_max_retries(self) -> int:
@@ -203,6 +273,7 @@ def load_config(config_root: str | None = None) -> AppConfig:
         validation=validation_file.validation,
         judge=validation_file.judge,
         repair_loop=validation_file.repair_loop,
+        closure_loops=validation_file.closure_loops,
     )
 
 

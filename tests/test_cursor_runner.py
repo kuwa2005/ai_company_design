@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -17,6 +16,20 @@ from ai_company.services.scheduler import run_once
 from ai_company.services.tasks import create_task
 
 
+def _popen_from_completed(completed: MagicMock) -> MagicMock:
+    """Adapt a CompletedProcess-like mock into a Popen-like mock."""
+    proc = MagicMock()
+    proc.pid = 4242
+    proc.poll.return_value = getattr(completed, "returncode", 0)
+    proc.returncode = getattr(completed, "returncode", 0)
+    proc.communicate.return_value = (
+        getattr(completed, "stdout", "") or "",
+        getattr(completed, "stderr", "") or "",
+    )
+    proc.stdout = True
+    return proc
+
+
 def test_build_cursor_command_from_config(tmp_env: Path) -> None:
     from ai_company.config import load_config
 
@@ -27,7 +40,6 @@ def test_build_cursor_command_from_config(tmp_env: Path) -> None:
     assert "--output-format" in cmd
     assert "json" in cmd
     assert cmd[-1] == "hello world"
-    # Never a single shell string
     assert all(isinstance(part, str) for part in cmd)
 
 
@@ -46,6 +58,7 @@ def test_cursor_command_uses_role_safe_noninteractive_modes(tmp_env: Path) -> No
     )
     assert "--auto-review" in coding
     assert "--force" not in coding
+    assert "--trust" in coding
     assert reviewer[reviewer.index("--mode") + 1] == "ask"
     assert supervisor[supervisor.index("--mode") + 1] == "plan"
     assert coding[coding.index("--sandbox") + 1] == "enabled"
@@ -72,13 +85,16 @@ def test_cursor_runner_success_saves_execution(
     completed.stderr = ""
 
     task = create_task(db_session, title="cursor-sample", priority=60)
-    with patch("ai_company.services.cursor_runner.subprocess.run", return_value=completed) as run:
+    with patch(
+        "ai_company.services.cursor_runner.subprocess.Popen",
+        return_value=_popen_from_completed(completed),
+    ) as popen:
         result = run_once(db_session, runner="cursor")
         assert result.started >= 1
-        run.assert_called()
-        kwargs = run.call_args.kwargs
+        popen.assert_called()
+        kwargs = popen.call_args.kwargs
         assert kwargs.get("shell") is False
-        assert isinstance(run.call_args.args[0], list)
+        assert isinstance(popen.call_args.args[0], list)
 
     db_session.refresh(task)
     assert task.status == TaskStatus.DONE
@@ -112,11 +128,13 @@ def test_cursor_runner_broken_json_not_success(
     completed.stderr = ""
 
     task = create_task(db_session, title="bad-json", priority=50, max_retries=0)
-    with patch("ai_company.services.cursor_runner.subprocess.run", return_value=completed):
+    with patch(
+        "ai_company.services.cursor_runner.subprocess.Popen",
+        return_value=_popen_from_completed(completed),
+    ):
         run_once(db_session, runner="cursor")
 
     db_session.refresh(task)
-    # max_retries=0 => escalate to nearest manager (not human yet)
     assert task.status == TaskStatus.FAILED
     replan = db_session.scalar(
         select(Task).where(Task.parent_task_id == task.id, Task.kind == "replan")
@@ -136,11 +154,14 @@ def test_cursor_runner_timeout_terminates(
     clear_config_cache()
     task = create_task(db_session, title="slow", priority=50, max_retries=2)
 
-    def _raise(*_a, **_k):
-        raise subprocess.TimeoutExpired(cmd=["agent"], timeout=1, output=b"", stderr=b"")
+    proc = MagicMock()
+    proc.pid = 99
+    proc.poll.return_value = None  # never finishes
+    proc.communicate.return_value = ("", "")
+    proc.stdout = True
 
-    with patch("ai_company.services.cursor_runner.subprocess.run", side_effect=_raise):
-        run_once(db_session, runner="cursor", timeout_seconds=1)
+    with patch("ai_company.services.cursor_runner.subprocess.Popen", return_value=proc):
+        run_once(db_session, runner="cursor", timeout_seconds=0.3)
 
     db_session.refresh(task)
     assert task.status == TaskStatus.READY  # requeued for retry
@@ -149,6 +170,7 @@ def test_cursor_runner_timeout_terminates(
     executions = list(db_session.scalars(select(Execution)).all())
     assert executions[0].success is False
     assert executions[0].result_json.get("timed_out") is True
+    proc.kill.assert_called()
 
 
 def test_cursor_reviewer_saves_validation_result(
@@ -188,24 +210,29 @@ def test_cursor_reviewer_saves_validation_result(
     }
 
     responses = [
-        MagicMock(returncode=0, stdout=json.dumps(coding_payload), stderr=""),
-        MagicMock(returncode=0, stdout=json.dumps(review_payload), stderr=""),
-        MagicMock(returncode=0, stdout=json.dumps(judge_payload), stderr=""),
+        _popen_from_completed(
+            MagicMock(returncode=0, stdout=json.dumps(coding_payload), stderr="")
+        ),
+        _popen_from_completed(
+            MagicMock(returncode=0, stdout=json.dumps(review_payload), stderr="")
+        ),
+        _popen_from_completed(
+            MagicMock(returncode=0, stdout=json.dumps(judge_payload), stderr="")
+        ),
     ]
 
     task = create_task(
         db_session, title="cursor-nolook", priority=70, risk_level="low"
     )
     with patch(
-        "ai_company.services.cursor_runner.subprocess.run", side_effect=responses
-    ) as run:
-        # coding -> validation -> judge (low risk = test only)
+        "ai_company.services.cursor_runner.subprocess.Popen", side_effect=responses
+    ) as popen:
         for _ in range(3):
             run_once(db_session, runner="cursor", max_to_start=4)
             db_session.refresh(task)
             if task.status == TaskStatus.DONE:
                 break
-        assert run.call_count >= 3
+        assert popen.call_count >= 3
 
     db_session.refresh(task)
     assert task.status == TaskStatus.DONE
