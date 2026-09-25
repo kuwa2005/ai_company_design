@@ -1,6 +1,15 @@
 # AI Company / Cursor Workforce Orchestrator
 
-人間は1つの常勤AIだけを操作し、その常勤AIが必要に応じて複数のCursor Coding Agentを短期雇用・指揮・終了するための基盤設計です。
+人間は1つの常勤AIだけを操作し、その常勤AIが必要に応じて複数のCursor Coding Agentを短期雇用・指揮・終了するための基盤です。
+
+## まず読む（利用者向け）
+
+| 文書 | 内容 |
+|------|------|
+| **[概要.md](./概要.md)** | 何の製品か・設計の核 |
+| **[なにができる.md](./なにができる.md)** | 機能一覧とできないこと |
+| **[使用説明書.md](./使用説明書.md)** | インストール〜日常操作〜例外対応 |
+| [OPERATING_FLOW.md](./OPERATING_FLOW.md) | 人のコマンドと機械が回す範囲（1枚） |
 
 ## コンセプト
 
@@ -79,6 +88,8 @@ ai-company start "優秀なWeb勤怠を作って" --autonomous --runner mock
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+詳しい手順・例外対応は **[使用説明書.md](./使用説明書.md)** を参照してください。
+
 将来は GitHub からのワンライン導入（pipx / uvx）を想定しています。いまは editable + shim です。
 
 予算デフォルトは **$0（Cursor 月額プラン内想定）** です。追加USD枠は設けず、暴走防止は `max_runs` / 同時Worker上限で行います。
@@ -86,6 +97,15 @@ export PATH="$HOME/.local/bin:$PATH"
 将来マイルストーン: **M11 Local Multi-Project Web UI**（ローカル複数案件、CLI 必須運用からの脱却。詳細は `10_IMPLEMENTATION_ROADMAP.md`）。
 
 ## ZIP内の読む順番
+
+### 利用者
+
+1. `概要.md`
+2. `なにができる.md`
+3. `使用説明書.md`
+4. `OPERATING_FLOW.md`
+
+### 設計・実装者
 
 1. `00_START_HERE.md`
 2. `01_PRODUCT_VISION.md`
