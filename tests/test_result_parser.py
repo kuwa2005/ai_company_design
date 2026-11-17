@@ -192,3 +192,32 @@ def test_parse_status_done_alias() -> None:
     assert parsed.ok is True
     assert parsed.result is not None
     assert parsed.result["status"] == "completed"
+
+
+def test_parse_structured_keeps_summary_for_department_work() -> None:
+    """agent-g 課題2: summary must survive normalization (department_work trace)."""
+    from ai_company.db.models import Task
+    from ai_company.services.department_orders import record_department_work_result
+
+    raw = json.dumps(
+        {
+            "status": "completed",
+            "changed_files": [],
+            "tests": {"passed": 0, "failed": 0},
+            "commit": None,
+            "issues": ["価格は社長判断"],
+            "summary": "提案書の骨子を作成",
+        }
+    )
+    parsed = parse_for_kind(raw, "coding")
+    assert parsed.ok and parsed.result is not None
+    assert parsed.result["summary"] == "提案書の骨子を作成"
+    task = Task(id="T", title="t", constraints="")
+    record_department_work_result(task, parsed.result)
+    data = json.loads(task.constraints)
+    assert data["work_order_summary"] == "提案書の骨子を作成"
+    assert data["work_order_issues"] == ["価格は社長判断"]
+    # missing summary normalizes to "" (not absent)
+    del_raw = json.loads(raw)
+    del del_raw["summary"]
+    assert parse_structured_result(json.dumps(del_raw)).result["summary"] == ""  # type: ignore[index]

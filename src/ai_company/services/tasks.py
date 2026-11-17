@@ -81,9 +81,17 @@ def create_task(
     review_type: str | None = None,
     source_execution_id: str | None = None,
     acceptance_criteria: str | None = None,
+    department_id: str | None = None,
+    section_id: str | None = None,
     config: AppConfig | None = None,
 ) -> Task:
     cfg = config or load_config()
+    if department_id is None:
+        from ai_company.org import org_unit_ids_for_task
+
+        department_id, derived_section = org_unit_ids_for_task(title, role_required, kind)
+        if section_id is None:
+            section_id = derived_section
     project = (
         session.get(Project, project_id)
         if project_id
@@ -103,6 +111,8 @@ def create_task(
         risk_level=risk_level,
         validation_plan_id=validation_plan_id,
         review_type=review_type,
+        department_id=department_id,
+        section_id=section_id,
         source_execution_id=source_execution_id,
         acceptance_criteria=acceptance_criteria or "",
         status=TaskStatus.BACKLOG,
@@ -128,7 +138,13 @@ def create_task(
         actor_id="owner",
         target_type="task",
         target_id=task.id,
-        metadata={"title": title, "priority": priority, "project_id": project.id},
+        metadata={
+            "title": title,
+            "priority": priority,
+            "project_id": project.id,
+            "department_id": department_id,
+            "section_id": section_id,
+        },
     )
 
     refresh_task_readiness(session, task.id)
@@ -242,10 +258,13 @@ def list_tasks(
     *,
     status: str | None = None,
     project_id: str | None = None,
+    department_id: str | None = None,
 ) -> list[Task]:
     stmt = select(Task).order_by(Task.priority.desc(), Task.created_at.asc())
     if status:
         stmt = stmt.where(Task.status == status)
+    if department_id:
+        stmt = stmt.where(Task.department_id == department_id)
     if project_id:
         stmt = stmt.where(Task.project_id == project_id)
     return list(session.scalars(stmt).all())

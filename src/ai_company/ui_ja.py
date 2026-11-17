@@ -29,11 +29,12 @@ KIND_JA = {
     "usability_audit": "使い勝手自問",
     "customer_success": "CS点検",
     "it_ops_audit": "情報システム点検",
-    "compliance_audit": "法務合规",
+    "compliance_audit": "法務・コンプライアンス",
     "test_audit": "テスト監査",
     "quality_audit": "品質向上",
     "sales_audit": "営業点検",
     "maintenance_audit": "保守資料点検",
+    "head_brief": "部長所見",
 }
 
 ROLE_JA = {
@@ -45,11 +46,11 @@ ROLE_JA = {
     "project_coordinator": "プロジェクト推進",
     "product_planner": "商品企画",
     "customer_success": "カスタマーサクセス",
-    "compliance_auditor": "法務・合规",
+    "compliance_auditor": "法務・コンプライアンス",
     "test_auditor": "テスト監査",
     "it_operations": "情報システム",
     "sales": "営業",
-    "maintenance": "保守部",
+    "maintenance": "保守担当",
     "reviewer": "レビュー",
     "test_reviewer": "テスト検証",
     "spec_reviewer": "仕様検証",
@@ -58,9 +59,14 @@ ROLE_JA = {
     "architecture_reviewer": "設計検証",
     "completeness_auditor": "残件監査",
     "usability_auditor": "使い勝手監査",
-    "quality_auditor": "品質向上部",
+    "quality_auditor": "品質監査",
     "judge": "判定",
     "secretary": "秘書",
+    "qa_director": "品質保証部長",
+    "sales_director": "営業部長",
+    "marketing_director": "マーケティング部長",
+    "legal_director": "法務部長",
+    "operations_director": "運用保守部長",
 }
 
 RUNNER_JA = {

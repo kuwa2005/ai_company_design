@@ -73,6 +73,67 @@ def release_lease(session: Session, task: Task) -> None:
     session.flush()
 
 
+_TERMINAL_WORKER = {
+    "TERMINATED",
+    "FAILED",
+    "TIMED_OUT",
+    "KILLED",
+}
+
+
+def _job_not_finalized(job: object | None) -> bool:
+    """True when a parallel mock job never reached ``_finalize_execution``.
+
+    A finalized job reports ``exec=<id>`` (success or a normal failure); a thread
+    exception or a missing row reports anything else (or no result at all).
+    """
+    if job is None:
+        return True
+    ok = bool(getattr(job, "ok", False))
+    detail = str(getattr(job, "detail", "") or "")
+    return not ok and not detail.startswith("exec=")
+
+
+def _recover_unfinalized_mock_job(
+    session: Session, *, task: Task, worker_id: str, detail: str
+) -> None:
+    """Clean up after a mock thread that died before finalizing (T1-S6 second-order).
+
+    Terminate the worker as FAILED, release the cost reservation, and put the task
+    back to READY (retry) or BLOCKED when retries are exhausted.
+    """
+    from ai_company.enums import TaskStatus, WorkerStatus
+    from ai_company.services.redact import redact_text, single_line
+    from ai_company.services.workers import terminate_worker
+
+    worker = session.get(Worker, worker_id)
+    if worker is not None and str(worker.status) not in _TERMINAL_WORKER:
+        terminate_worker(session, worker=worker, status=WorkerStatus.FAILED)
+    if task.status in {TaskStatus.DONE, TaskStatus.CANCELLED}:
+        return
+    cg.release_reservation(session, task=task)
+    task.retry_count += 1
+    exhausted = task.retry_count > task.max_retries
+    task.status = TaskStatus.BLOCKED if exhausted else TaskStatus.READY
+    session.flush()
+    record_audit(
+        session,
+        event_type="task_failed",
+        actor_type="system",
+        actor_id="scheduler",
+        target_type="task",
+        target_id=task.id,
+        metadata={
+            "reason": "mock_thread_exception",
+            "detail": single_line(redact_text(detail))[:300],
+            "retry_count": task.retry_count,
+            "next_status": str(task.status),
+        },
+    )
+    # Same as a FAILED execution: repeated thread crashes open the circuit (L-3).
+    cg.record_failure_and_maybe_trip(session)
+
+
 def _try_prepare(
     session: Session,
     *,
@@ -195,6 +256,9 @@ def _try_prepare(
         assert_dispatch_allowed(session, task=task, role=task.role_required, config=cfg)
     except PermissionError as exc:
         result.denied += 1
+        # reserve_budget ran above; without this, every policy denial leaks a
+        # reservation and inflates the spend estimate (Info, T4-S3).
+        cg.release_reservation(session, task=task)
         release_lease(session, task)
         seen_blocked_lease.add(task.id)
         record_audit(
@@ -350,6 +414,12 @@ def run_once(
             for task, worker in batch:
                 job = by_id.get(task.id)
                 t = session.get(Task, task.id)
+                if t is not None and _job_not_finalized(job):
+                    # The thread raised before _finalize_execution: its session rolled
+                    # back, so the worker slot / reservation / RUNNING state would leak.
+                    _recover_unfinalized_mock_job(
+                        session, task=t, worker_id=worker.id, detail=job.detail if job else ""
+                    )
                 if t is not None:
                     release_lease(session, t)
                     progress(

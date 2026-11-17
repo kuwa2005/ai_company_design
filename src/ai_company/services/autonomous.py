@@ -9,10 +9,15 @@ from sqlalchemy.orm import Session
 
 from ai_company.config import AppConfig, load_config
 from ai_company.db.models import Artifact, Project, Task
-from ai_company.enums import ProjectStatus, TaskKind, TaskStatus
+from ai_company.enums import CostDecision, ProjectStatus, TaskKind, TaskStatus
 from ai_company.ids import new_id
 from ai_company.paths import executions_dir
 from ai_company.services.audit import record_audit
+from ai_company.services.cost_governor import (
+    TIME_WINDOW_DEFER_REASONS,
+    BudgetWindowWait,
+    budget_window_wait,
+)
 from ai_company.services.progress import emit as progress
 from ai_company.services.scheduler import SchedulerResult, run_once
 from ai_company.services.secretary import exception_digest, human_summary
@@ -35,6 +40,61 @@ class AutonomousResult:
     release_candidate_id: str | None = None
     summaries: list[str] = field(default_factory=list)
     last_scheduler: SchedulerResult | None = None
+    # Set when stopped_reason == "budget_wait" (hourly/daily window cap hit).
+    budget_wait: BudgetWindowWait | None = None
+    # Projects completed by a ``scheduler continue`` without ``--project``.
+    completed_project_ids: list[str] = field(default_factory=list)
+    # Every release candidate created in this run (``release_candidate_id`` is the last).
+    release_candidate_ids: list[str] = field(default_factory=list)
+
+
+def _time_window_stall(
+    session: Session, sched: SchedulerResult, cfg: AppConfig
+) -> BudgetWindowWait | None:
+    """Nothing started and every deferral was a rolling-window cap.
+
+    Retrying in the same window only re-defers (DEFERRED_BUDGET is revived to
+    READY every cycle), so the loop would spin until max_cycles. Detect it and
+    let the caller stop with "budget_wait".
+    """
+    if sched.started > 0 or sched.deferred == 0:
+        return None
+    reasons = [
+        str(d.get("reason") or "")
+        for d in sched.details
+        if d.get("result") in {CostDecision.DEFER, CostDecision.DEFER.value}
+    ]
+    if not reasons or any(r not in TIME_WINDOW_DEFER_REASONS for r in reasons):
+        return None
+    # Mirror evaluate's cost check (spent + estimate > cap) with the cheapest
+    # deferred task, so a cost-cap DEFER below the raw cap is still detected.
+    deferred_ids = [
+        str(d.get("task_id"))
+        for d in sched.details
+        if d.get("result") in {CostDecision.DEFER, CostDecision.DEFER.value}
+        and d.get("task_id")
+    ]
+    costs = [
+        float(t.estimated_cost or 0.0)
+        for t in (session.get(Task, tid) for tid in deferred_ids)
+        if t is not None
+    ]
+    wait = budget_window_wait(session, config=cfg, next_cost=min(costs) if costs else 0.0)
+    if wait is None:  # window moved on between evaluate and now — keep going
+        return None
+    return wait
+
+
+def _budget_wait_progress(wait: BudgetWindowWait) -> str:
+    mins = wait.wait_minutes()
+    eta = (
+        f"約{mins}分後（{wait.resume_at_local_text()} 頃）に再開可"
+        if mins is not None
+        else "再開時刻は不明"
+    )
+    return (
+        f"停止  理由=予算待ち・{wait.reason_ja}（{wait.used:g}/{wait.limit:g}）  {eta}"
+    )
 
 
 def _implementation_tasks(session: Session, project_id: str) -> list[Task]:
@@ -56,7 +116,47 @@ def _project_complete(session: Session, project_id: str) -> bool:
 
     if not all_implementation_done(session, project_id):
         return False
+    if _open_document_work(session, project_id):
+        # 部門作業（社長回答による改訂を含む）・部長所見が残っていれば未完了 (H-1)
+        return False
     return closure_loops_finished(session, project_id)
+
+
+_DOCUMENT_WORK_KINDS = ("department_work", "head_brief")
+
+
+def _open_document_work(session: Session, project_id: str) -> int:
+    """Open (not DONE / CANCELLED) department_work / head_brief tasks of a project."""
+    return int(
+        session.scalar(
+            select(func.count())
+            .select_from(Task)
+            .where(
+                Task.project_id == project_id,
+                Task.kind.in_(_DOCUMENT_WORK_KINDS),
+                Task.status.not_in((TaskStatus.DONE, TaskStatus.CANCELLED)),
+            )
+        )
+        or 0
+    )
+
+
+def _active_project_count(session: Session) -> int:
+    return int(
+        session.scalar(
+            select(func.count())
+            .select_from(Project)
+            .where(Project.status == ProjectStatus.ACTIVE)
+        )
+        or 0
+    )
+
+
+def _record_release(result: AutonomousResult, art_id: str) -> None:
+    """Keep every release candidate made in this run (L-1), latest last."""
+    result.release_candidate_id = art_id
+    if art_id not in result.release_candidate_ids:
+        result.release_candidate_ids.append(art_id)
 
 
 def _has_blocking_exception(session: Session, project_id: str) -> bool:
@@ -277,6 +377,48 @@ def _has_runnable_work(session: Session, project_id: str | None = None) -> bool:
     return int(session.scalar(stmt) or 0) > 0
 
 
+def _complete_finished_projects(session: Session, result: AutonomousResult) -> list[str]:
+    """Mark every ACTIVE project whose completion conditions hold as DONE.
+
+    Used when ``scheduler continue`` runs without ``--project`` (all projects):
+    previously only the ``--project`` path created the release candidate, so a
+    project resumed from "予算待ち" by the guidance stayed ACTIVE forever.
+    Returns the ids of the projects completed in this call.
+    """
+    done: list[str] = []
+    for project in session.scalars(
+        select(Project)
+        .where(Project.status == ProjectStatus.ACTIVE)
+        .order_by(Project.created_at.asc())
+    ).all():
+        if not _project_complete(session, project.id):
+            continue
+        project.status = ProjectStatus.DONE
+        session.flush()
+        art = create_release_candidate(session, project=project)
+        _record_release(result, art.id)
+        result.completed_project_ids.append(project.id)
+        done.append(project.id)
+    return done
+
+
+def _no_project_stop_reason(session: Session) -> str:
+    """After completing projects without ``--project`` and nothing is runnable:
+    "all done" only if no ACTIVE project is left, else idle_incomplete (M-1)."""
+    return "idle_incomplete" if _active_project_count(session) else "all_implementation_done"
+
+
+def _no_project_stop_progress(session: Session, result: AutonomousResult) -> str:
+    remaining = _active_project_count(session)
+    done = len(result.completed_project_ids)
+    if remaining:
+        return (
+            f"継続実行停止  理由=完了 {done} 件、未完了 {remaining} 件"
+            "（実行できるタスクがない案件あり）"
+        )
+    return f"継続実行完了  理由=完了条件を満たした案件を完了処理（{done} 件）"
+
+
 def continue_until_gate(
     session: Session,
     *,
@@ -334,10 +476,21 @@ def continue_until_gate(
                 project.status = ProjectStatus.DONE
                 session.flush()
                 art = create_release_candidate(session, project=project)
-                result.release_candidate_id = art.id
+                _record_release(result, art.id)
             result.stopped_reason = "all_implementation_done"
             progress("継続実行完了  理由=実装タスクすべて完了")
             break
+
+        # No --project: finish every ACTIVE project that is complete (N-1);
+        # stop only when nothing runnable is left anywhere.
+        if not project_id and _complete_finished_projects(session, result):
+            # Stop here only when no ACTIVE project is left. Otherwise run the
+            # scheduler: it spawns the next closure phase of the other projects
+            # (M-1: stopping early left them ACTIVE with "実装完了").
+            if not _has_runnable_work(session, None) and not _active_project_count(session):
+                result.stopped_reason = _no_project_stop_reason(session)
+                progress(_no_project_stop_progress(session, result))
+                break
 
         snap = (
             _progress_snapshot(session, project_id)
@@ -384,6 +537,13 @@ def continue_until_gate(
                 progress("継続実行停止  理由=停止タスクあり（要判断）")
                 break
 
+        wait = _time_window_stall(session, sched, cfg)
+        if wait is not None:
+            result.stopped_reason = "budget_wait"
+            result.budget_wait = wait
+            progress("継続実行" + _budget_wait_progress(wait))
+            break
+
         if sched.started == 0 and not _has_runnable_work(session, project_id):
             if project_id and _project_complete(session, project_id):
                 project = session.get(Project, project_id)
@@ -391,9 +551,12 @@ def continue_until_gate(
                     project.status = ProjectStatus.DONE
                     session.flush()
                     art = create_release_candidate(session, project=project)
-                    result.release_candidate_id = art.id
+                    _record_release(result, art.id)
                 result.stopped_reason = "all_implementation_done"
                 progress("継続実行完了  理由=実装タスクすべて完了")
+            elif not project_id and _complete_finished_projects(session, result):
+                result.stopped_reason = _no_project_stop_reason(session)
+                progress(_no_project_stop_progress(session, result))
             else:
                 result.stopped_reason = "idle_incomplete"
                 progress("継続実行停止  理由=実行できるタスクがない")
@@ -427,6 +590,18 @@ def continue_until_gate(
             "cycles": result.cycles,
             "started_total": result.started_total,
             "stopped_reason": result.stopped_reason,
+            "budget_wait": (
+                {
+                    "reason": result.budget_wait.reason,
+                    "resume_at": (
+                        result.budget_wait.resume_at.isoformat()
+                        if result.budget_wait.resume_at
+                        else None
+                    ),
+                }
+                if result.budget_wait
+                else None
+            ),
         },
     )
     return result
@@ -477,7 +652,7 @@ def run_autonomous(
             project.status = ProjectStatus.DONE
             session.flush()
             art = create_release_candidate(session, project=project)
-            result.release_candidate_id = art.id
+            _record_release(result, art.id)
             result.project_status = project.status
             result.stopped_reason = "all_implementation_done"
             result.summaries.append(human_summary(session, project_id=project_id))
@@ -512,12 +687,21 @@ def run_autonomous(
             f"{_progress_snapshot(session, project_id)}"
         )
 
+        wait = _time_window_stall(session, sched, cfg)
+        if wait is not None:
+            result.stopped_reason = "budget_wait"
+            result.budget_wait = wait
+            result.project_status = project.status
+            result.summaries.append(human_summary(session, project_id=project_id))
+            progress("自動実行" + _budget_wait_progress(wait))
+            break
+
         if sched.started == 0 and _idle(session, project_id):
             if _project_complete(session, project_id):
                 project.status = ProjectStatus.DONE
                 session.flush()
                 art = create_release_candidate(session, project=project)
-                result.release_candidate_id = art.id
+                _record_release(result, art.id)
                 result.stopped_reason = "all_implementation_done"
                 progress(f"自動実行完了  理由=実装タスクすべて完了  候補={art.id}")
             else:
@@ -547,6 +731,9 @@ def run_autonomous(
             "started_total": result.started_total,
             "stopped_reason": result.stopped_reason,
             "release_candidate_id": result.release_candidate_id,
+            "release_candidate_ids": result.release_candidate_ids,
+            "completed_project_ids": result.completed_project_ids,
+            "budget_wait_reason": result.budget_wait.reason if result.budget_wait else None,
         },
     )
     return result

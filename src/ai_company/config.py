@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -80,12 +80,61 @@ class StaffingConfig(BaseModel):
     )
 
 
+class MeetingResolutionsConfig(BaseModel):
+    """重役会議の決議 → 部門作業指示（Work Order）の起票上限."""
+
+    enabled: bool = True
+    max_orders_per_meeting: int = Field(default=4, ge=0)
+    max_orders_per_department: int = Field(default=2, ge=0)
+    # 0 = 件数上限のみ（定額サブスク運用）
+    max_estimated_cost_per_meeting_usd: float = Field(default=0.0, ge=0.0)
+    # 計画の中核タスク（〜85）を追い越さない
+    priority_ceiling: int = Field(default=80, ge=0, le=100)
+    # 起票を許す部（ホワイトリスト）
+    departments: list[str] = Field(
+        default_factory=lambda: ["legal", "sales", "marketing", "operations"]
+    )
+    # 社長の回答（decide）を後続の Worker プロンプトへ DATA として渡す
+    inject_decisions: bool = True
+    # 回答を受けて「完了済みの部門作業の改訂」を起票する上限（案件あたり）。0 = 起票しない
+    max_decision_revisions_per_project: int = Field(default=3, ge=0)
+
+
+class HeadLLMConfig(BaseModel):
+    """部長を短命 Worker（head_brief）として呼ぶ任意機能. 既定オフ.
+
+    オフのときは会議テンプレートの Work Order だけを起票する（従来どおり）。
+    オンのときは対象部の Work Order を保留し、部長所見の検証済み指示で置き換える。
+    失敗・却下・リトライ上限では保留したテンプレートを起票する（fallback=template）。
+    """
+
+    enabled: bool = False
+    departments: list[str] = Field(
+        default_factory=lambda: ["sales", "marketing", "legal", "operations"]
+    )
+    max_heads_per_meeting: int = Field(default=4, ge=0)
+    estimated_cost_per_head: float = Field(default=0.05, ge=0.0)
+    max_retries: int = Field(default=1, ge=0)
+    fallback: Literal["template", "none"] = "template"
+    # 実装完了後（自問ループ前）に、未着手（READY/WAITING/BACKLOG）のまま
+    # この回数だけ待たされた所見はテンプレートへフォールバックする。
+    max_wait_cycles: int = Field(default=3, ge=0)
+
+
+class ExecutiveMeetingConfig(BaseModel):
+    head_llm: HeadLLMConfig = Field(default_factory=HeadLLMConfig)
+
+
 class SettingsConfig(BaseModel):
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     retry: RetryConfig = Field(default_factory=RetryConfig)
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
     staffing: StaffingConfig = Field(default_factory=StaffingConfig)
+    meeting_resolutions: MeetingResolutionsConfig = Field(
+        default_factory=MeetingResolutionsConfig
+    )
+    executive_meeting: ExecutiveMeetingConfig = Field(default_factory=ExecutiveMeetingConfig)
 
 
 class BudgetValidationLimits(BaseModel):

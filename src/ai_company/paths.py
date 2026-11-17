@@ -52,3 +52,8 @@ def audit_log_path() -> Path:
 
 def executions_dir() -> Path:
     return data_dir() / "executions"
+
+
+def meetings_dir() -> Path:
+    """Executive meeting minutes (重役会議 議事録)."""
+    return data_dir() / "meetings"

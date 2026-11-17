@@ -54,8 +54,21 @@ _READ_ONLY_KINDS = frozenset(
         "quality_audit",
         "sales_audit",
         "maintenance_audit",
+        # 会議の部門作業指示: 成果物は結果 JSON（文書）で、リポジトリは変更しない
+        "department_work",
+        # 部長所見: 判断（JSON）のみ。リポジトリは変更しない
+        "head_brief",
     }
 )
+
+
+def is_read_only_kind(kind: str | None) -> bool:
+    """True for task kinds that must never write to the workspace.
+
+    Shared by the policy check and the Cursor command builder so that the
+    runner mode (``--mode <read_only>``) always matches ``role_allows_writes``.
+    """
+    return kind is not None and str(kind) in _READ_ONLY_KINDS
 
 
 def _profiles(config: AppConfig) -> dict[str, Any]:
@@ -114,6 +127,8 @@ def infer_dispatch_action(task: Task) -> str:
         "quality_audit",
         "sales_audit",
         "maintenance_audit",
+        "department_work",
+        "head_brief",
     } or kind.endswith("_audit"):
         return "code.read"
     return "code.edit"

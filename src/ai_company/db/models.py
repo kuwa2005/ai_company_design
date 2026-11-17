@@ -52,6 +52,10 @@ class Task(Base):
     validation_plan_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     source_execution_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     review_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Organizational owner of the work: 部（Department）/ 課（Section）ids from
+    # ``ai_company.org``. Display/aggregation only — routing stays on role.
+    department_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    section_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="BACKLOG", index=True)
     priority: Mapped[int] = mapped_column(Integer, default=50, index=True)
     constraints: Mapped[str] = mapped_column(Text, default="")

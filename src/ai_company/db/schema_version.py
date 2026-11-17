@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from ai_company.db.models import Base
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4  # 4: tasks.department_id / tasks.section_id
 
 
 class SchemaVersion(Base):
@@ -28,7 +28,7 @@ def ensure_schema_version(session: Session) -> int:
     current = session.scalar(
         select(SchemaVersion).order_by(SchemaVersion.version.desc()).limit(1)
     )
-    if current is None:
+    if current is None or int(current.version) < SCHEMA_VERSION:
         row = SchemaVersion(version=SCHEMA_VERSION, application_version="0.1.0")
         session.add(row)
         session.flush()

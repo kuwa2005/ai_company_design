@@ -70,11 +70,11 @@ After implementation queue is empty (not yet release):
                                                                                       |
                                                                                       +-- CLEAR --> IT Operations（情報システム）
                                                                                                       |
-                                                                                                      +-- CLEAR --> Compliance（法務合规）
+                                                                                                      +-- CLEAR --> Compliance（法務・コンプライアンス）
                                                                                                                       |
                                                                                                                       +-- CLEAR --> Test Auditor（テスト監査）
                                                                                                                                       |
-                                                                                                                                      +-- CLEAR --> Quality Auditor（品質向上部）
+                                                                                                                                      +-- CLEAR --> Quality Auditor（品質監査課）
                                                                                                                                                       |
                                                                                                                                                       +-- CLEAR --> Sales（営業・軽量）
                                                                                                                                                                       |

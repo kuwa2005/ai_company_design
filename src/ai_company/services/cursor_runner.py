@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from ai_company.config import AppConfig, CursorRunnerConfig, load_config
 from ai_company.db.models import Task
 from ai_company.paths import project_root
+from ai_company.services.policy_engine import is_read_only_kind
 from ai_company.services.prompt_builder import build_task_prompt
 
 
@@ -47,7 +48,9 @@ def build_cursor_command(
         cmd.extend([output_format_flag, cfg.output_format])
     if task_kind == "replan":
         cmd.extend(["--mode", cfg.supervisor_mode])
-    elif task_kind in {"validation", "judge"}:
+    elif is_read_only_kind(task_kind):
+        # validation / judge / closure audits / department_work: enforce read-only
+        # at the runner, not only via the prompt (evidence only detects after the fact).
         cmd.extend(["--mode", cfg.read_only_mode])
     elif cfg.auto_review:
         cmd.append("--auto-review")

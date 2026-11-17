@@ -220,6 +220,51 @@ def _finalize_execution(
             )
             return execution
 
+        if task.kind in {TaskKind.HEAD_BRIEF, "head_brief"}:
+            # 部長所見: 秘書側で検証し、自部門の Work Order だけを起票（失敗はテンプレートへ）
+            from ai_company.services.head_briefs import apply_head_brief
+            from ai_company.services.tasks import refresh_dependents
+
+            apply_head_brief(
+                session, task=task, payload=execution.result_json or {}, config=cfg
+            )
+            task.status = TaskStatus.DONE
+            session.flush()
+            record_audit(
+                session,
+                event_type="task_completed",
+                actor_type="worker",
+                actor_id=worker.id,
+                target_type="task",
+                target_id=task.id,
+                metadata={"execution_id": execution.id, "kind": "head_brief"},
+            )
+            refresh_dependents(session, task.id)
+            return execution
+
+        if task.kind in {TaskKind.DEPARTMENT_WORK, "department_work"}:
+            # 会議の部門作業指示: 文書成果物。検証ゲートには入らず、自問ループで点検。
+            # proposed_tasks は無視する（連鎖で起票が増える経路を作らない）。
+            from ai_company.services.department_orders import (
+                record_department_work_result,
+            )
+            from ai_company.services.tasks import refresh_dependents
+
+            record_department_work_result(task, execution.result_json or {})
+            task.status = TaskStatus.DONE
+            session.flush()
+            record_audit(
+                session,
+                event_type="task_completed",
+                actor_type="worker",
+                actor_id=worker.id,
+                target_type="task",
+                target_id=task.id,
+                metadata={"execution_id": execution.id, "kind": "department_work"},
+            )
+            refresh_dependents(session, task.id)
+            return execution
+
         # Implementation / repair / manager replan
         if is_implementation_task(task):
             if task.kind in {"replan", TaskKind.REPLAN}:
@@ -405,7 +450,18 @@ def _finalize_execution(
             target_id=task.id,
             metadata={"reason": "timeout", "retry_count": task.retry_count},
         )
-    if task.retry_count > task.max_retries:
+    if task.retry_count > task.max_retries and task.kind in {TaskKind.HEAD_BRIEF, "head_brief"}:
+        # 部長は reports_to 経路に入らない: 上申せず、保留テンプレートを起票して閉じる。
+        from ai_company.services.head_briefs import close_failed_head_brief
+
+        close_failed_head_brief(
+            session,
+            task=task,
+            reason=f"retries_exhausted:{task.retry_count}/{task.max_retries}",
+            config=cfg,
+        )
+        cg.record_failure_and_maybe_trip(session)
+    elif task.retry_count > task.max_retries:
         escalate_blocked_task(
             session,
             task=task,
@@ -436,6 +492,18 @@ def _finalize_execution(
     session.flush()
     cg.record_failure_and_maybe_trip(session)
     return execution
+
+
+def mock_department_work_summary(task: Task) -> str:
+    """Deterministic deliverable summary for a mock ``department_work`` task."""
+    from ai_company.org import unit_label
+
+    try:
+        key = str(json.loads(task.constraints or "{}").get("work_order_key") or "-")
+    except (json.JSONDecodeError, AttributeError):
+        key = "-"
+    unit = unit_label(task.department_id, task.section_id)
+    return f"[mock] {unit}「{task.title}」の成果物（key={key}）: 受け入れ条件を満たす文書を作成"
 
 
 def run_mock_worker(
@@ -475,6 +543,10 @@ def run_mock_worker(
                 "mock": True,
                 "task_id": task.id,
             }
+        elif task.kind in {TaskKind.HEAD_BRIEF, "head_brief"}:
+            from ai_company.services.head_briefs import build_mock_head_brief
+
+            result = build_mock_head_brief(task)
         elif task.kind in {TaskKind.REPLAN, "replan"}:
             result = {
                 "status": "completed",
@@ -516,6 +588,16 @@ def run_mock_worker(
                 "summary": f"mock {task.kind} found nothing remaining",
                 "proposed_tasks": [],
                 "evidence": [{"kind": "mock_closure"}],
+                "mock": True,
+                "task_id": task.id,
+            }
+        elif task.kind in {TaskKind.DEPARTMENT_WORK, "department_work"}:
+            # 決定論的な成果要約（乱数・時刻なし）: 自問監査へ要約が渡る流れを mock で確認できる
+            result = {
+                "status": "completed",
+                "summary": mock_department_work_summary(task),
+                "issues": [],
+                "changed_files": [],
                 "mock": True,
                 "task_id": task.id,
             }
@@ -583,6 +665,7 @@ def run_mock_worker(
         estimated_cost=task.estimated_cost,
         actual_cost=actual_cost,
         result_json=result,
+        runner_kind="mock",
     )
     session.add(execution)
     session.flush()
@@ -688,6 +771,8 @@ def run_cursor_worker(
         parse_kind = "judge"
     elif task.kind in {TaskKind.REPLAN, "replan"}:
         parse_kind = "supervisor"
+    elif task.kind in {TaskKind.HEAD_BRIEF, "head_brief"}:
+        parse_kind = "head"
     else:
         parse_kind = "coding"
 

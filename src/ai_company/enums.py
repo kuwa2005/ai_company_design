@@ -36,6 +36,10 @@ class TaskKind(StrEnum):
     QUALITY_AUDIT = "quality_audit"
     SALES_AUDIT = "sales_audit"
     MAINTENANCE_AUDIT = "maintenance_audit"
+    # 重役会議の決議から起票される部門作業（文書成果物・コード変更なし）
+    DEPARTMENT_WORK = "department_work"
+    # 部長所見（短命の部長 Worker が会議の論点を判断する。既定オフ・読み取り専用）
+    HEAD_BRIEF = "head_brief"
 
 
 class WorkerStatus(StrEnum):

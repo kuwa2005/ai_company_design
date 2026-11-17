@@ -134,12 +134,15 @@ def resolve_approval_choice(
 
 
 def choice_result_message(choice: ApprovalChoice, approval: Approval) -> str:
+    from rich.markup import escape
+
+    aid = escape(str(approval.id))
     if choice == ApprovalChoice.YES:
-        return f"[green]承認[/green] {approval.id} → 続行 OK（タスクを再キューしました）"
+        return f"[green]承認[/green] {aid} → 続行 OK（タスクを再キューしました）"
     if choice == ApprovalChoice.NO:
-        return f"[yellow]却下[/yellow] {approval.id} → 打ち切り（自動続行しません）"
+        return f"[yellow]却下[/yellow] {aid} → 打ち切り（自動続行しません）"
     return (
-        f"[yellow]再検討[/yellow] {approval.id} → "
+        f"[yellow]再検討[/yellow] {aid} → "
         "次回の自律実行で直属上司へ戻します"
     )
 
@@ -179,7 +182,8 @@ def run_interactive_approval_session(
         task_id = _task_id_from_reason(approval.reason)
         task = session.get(Task, task_id) if task_id else None
         console.print("")
-        console.print(describe_approval_prompt(approval, task=task))
+        # plain text: title / reason come from workers → never parse as rich markup
+        console.print(describe_approval_prompt(approval, task=task), markup=False)
         console.print("")
         while True:
             raw = Prompt.ask(
@@ -207,6 +211,7 @@ def run_interactive_approval_session(
             session,
             stopped_reason="scheduler_pause" if approved_any else None,
             runner=runner,
-        )
+        ),
+        markup=False,
     )
     return approved_any

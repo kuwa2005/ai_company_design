@@ -567,3 +567,121 @@ def revive_deferred_budget_tasks(
     if revived:
         session.flush()
     return revived
+
+
+# --- time-window caps (runaway protection) ---------------------------------
+
+# DEFER reasons that clear by themselves once the rolling window moves on.
+# Retrying inside the same window cannot succeed, so callers should stop and
+# tell the human when work may resume instead of spinning.
+TIME_WINDOW_DEFER_REASONS: frozenset[str] = frozenset(
+    {"hourly_max_runs", "hourly_max_cost", "daily_max_runs", "daily_max_cost"}
+)
+
+_WINDOW_OF_REASON: dict[str, timedelta] = {
+    "hourly_max_runs": timedelta(hours=1),
+    "hourly_max_cost": timedelta(hours=1),
+    "daily_max_runs": timedelta(days=1),
+    "daily_max_cost": timedelta(days=1),
+}
+
+WINDOW_REASON_JA: dict[str, str] = {
+    "hourly_max_runs": "直近1時間の実行回数上限",
+    "hourly_max_cost": "直近1時間の費用上限",
+    "daily_max_runs": "直近24時間の実行回数上限",
+    "daily_max_cost": "直近24時間の費用上限",
+}
+
+
+@dataclass
+class BudgetWindowWait:
+    reason: str  # one of TIME_WINDOW_DEFER_REASONS
+    limit: float
+    used: float
+    resume_at: datetime | None  # naive UTC; None = unknown
+
+    @property
+    def reason_ja(self) -> str:
+        return WINDOW_REASON_JA.get(self.reason, self.reason)
+
+    def wait_minutes(self, now: datetime | None = None) -> int | None:
+        if self.resume_at is None:
+            return None
+        delta = self.resume_at - (now or _utcnow())
+        return max(0, int((delta.total_seconds() + 59) // 60))
+
+    def resume_at_local_text(self) -> str:
+        if self.resume_at is None:
+            return "不明"
+        return self.resume_at.replace(tzinfo=UTC).astimezone().strftime("%m/%d %H:%M")
+
+
+def _task_spend_times(session: Session, *, since: datetime) -> list[tuple[datetime, float]]:
+    rows = session.execute(
+        select(BudgetEntry.created_at, BudgetEntry.amount)
+        .where(
+            BudgetEntry.kind == BudgetKind.SPEND,
+            BudgetEntry.scope_type == "task",
+            BudgetEntry.created_at >= since,
+        )
+        .order_by(BudgetEntry.created_at.asc())
+    ).all()
+    return [(r[0], float(r[1] or 0.0)) for r in rows]
+
+
+def budget_window_wait(
+    session: Session,
+    *,
+    config: AppConfig | None = None,
+    next_cost: float = 0.0,
+) -> BudgetWindowWait | None:
+    """Return the time-window cap currently exhausted (hourly first), else None.
+
+    ``resume_at`` is when enough old SPEND entries leave the rolling window for
+    one more run (runs cap) or for the window spend to drop below the cap
+    (cost cap). Mirrors the checks in ``evaluate`` (runs: ``>=``; cost: ``>=``
+    when the next task's estimate is unknown). Pass ``next_cost`` (the cheapest
+    deferred task's estimate) to mirror ``evaluate`` exactly for cost caps:
+    ``used + next_cost > limit``.
+    """
+    cfg = config or load_config()
+    b = cfg.budget.budget
+    now = _utcnow()
+    checks: list[tuple[str, float]] = [
+        ("hourly_max_runs", float(b.hourly.max_runs)),
+        ("hourly_max_cost", float(b.hourly.max_cost_usd)),
+        ("daily_max_runs", float(b.daily.max_runs)),
+        ("daily_max_cost", float(b.daily.max_cost_usd)),
+    ]
+    for reason, limit in checks:
+        if limit <= 0:
+            continue  # 0 = cap disabled (cost) / nonsensical (runs)
+        window = _WINDOW_OF_REASON[reason]
+        spends = _task_spend_times(session, since=now - window)
+        if reason.endswith("_runs"):
+            used = float(len(spends))
+            if used < limit:
+                continue
+            # need len - k < limit  →  drop the oldest (len - limit + 1) entries
+            idx = int(used - limit)
+            resume_at = spends[idx][0] + window if spends else None
+        else:
+            used = sum(a for _, a in spends)
+
+            def _fits(total: float, limit: float = limit) -> bool:
+                if next_cost > 0:
+                    return total + next_cost <= limit
+                return total < limit
+
+            if _fits(used):
+                continue
+            resume_at = None
+            if next_cost <= limit:  # else the task never fits this cap
+                running = used
+                for ts, amount in spends:
+                    running -= amount
+                    if _fits(running):
+                        resume_at = ts + window
+                        break
+        return BudgetWindowWait(reason=reason, limit=limit, used=used, resume_at=resume_at)
+    return None

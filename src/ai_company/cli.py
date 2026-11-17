@@ -6,6 +6,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from ai_company.config import clear_config_cache, load_config
@@ -25,6 +26,7 @@ from ai_company.services.debug_trace import (
     task_trace,
 )
 from ai_company.services.escalation import list_approvals, resolve_approval
+from ai_company.services.redact import single_line
 from ai_company.services.scheduler import run_once
 from ai_company.services.secretary import (
     answer_question,
@@ -195,6 +197,12 @@ def start_cmd(
         "--delivery-mode",
         help="strict | ship_first | prototype | balanced",
     ),
+    no_meeting: bool = typer.Option(
+        False, "--no-meeting", help="重役会議（部長招集と部/課への割り当て）を省略"
+    ),
+    all_departments: bool = typer.Option(
+        False, "--all-departments", help="重役会議に全部長を招集する"
+    ),
 ) -> None:
     """Secretary plans Tasks + Staffing Requests. Never spawns workers itself."""
     if runner not in {"mock", "cursor"}:
@@ -208,15 +216,60 @@ def start_cmd(
     if autonomous or dispatch:
         set_progress(not quiet)
     with session_scope() as session:
-        result = start_goal(session, goal)
-        console.print(f"[green]案件[/green] {result.project.id}  {result.project.name}")
+        result = start_goal(
+            session,
+            goal,
+            hold_meeting=not no_meeting,
+            all_departments=all_departments,
+        )
+        console.print(f"[green]案件[/green] {result.project.id}  {escape(result.project.name)}")
+        if result.meeting is not None:
+            from ai_company.services.executive_meeting import minutes_brief
+
+            console.print(minutes_brief(result.meeting), markup=False)
+        if result.head_brief_tasks:
+            depts = "、".join(str(t.department_id) for t in result.head_brief_tasks)
+            console.print(
+                f"部長所見: {len(result.head_brief_tasks)}件（{depts}）"
+                "— 部長 Worker の判断後にその部の部門作業を起票",
+                markup=False,
+            )
+        if result.head_brief_skipped:
+            from ai_company.org import department_by_id
+
+            console.print(
+                f"部長所見を見送り: {len(result.head_brief_skipped)}部"
+                "（その部はテンプレートの部門作業で起票）",
+                markup=False,
+            )
+            for dept_id, why in result.head_brief_skipped.items():
+                try:
+                    name = department_by_id(dept_id).name_ja
+                except KeyError:
+                    name = dept_id
+                console.print(f"  - {name}: {why}", markup=False)
+            if len(result.head_brief_skipped) and not result.head_brief_tasks:
+                console.print(
+                    "  ※ 部長が全員見送りです。config/permissions.yaml に部長ロールの"
+                    "プロファイル（code.read 等）が無い可能性があります（追加は要承認）",
+                    markup=False,
+                )
         console.print(f"作成したタスク: {len(result.tasks)}")
+        if result.work_order_tasks:
+            console.print(f"部門作業指示: {len(result.work_order_tasks)}")
+            for t in result.work_order_tasks:
+                console.print(
+                    f"  - [{status_ja(t.status)}] {t.id}  {t.title}  "
+                    f"役割={role_ja(t.role_required)}",
+                    markup=False,
+                )
         console.print(f"人員依頼: {len(result.staffing)}")
         console.print(f"検証提案: {len(result.validation_requests)}")
         for t in result.tasks:
             console.print(
                 f"  - [{status_ja(t.status)}] {t.id}  {t.title}  "
-                f"役割={role_ja(t.role_required)}  リスク={t.risk_level}"
+                f"役割={role_ja(t.role_required)}  リスク={t.risk_level}",
+                markup=False,
             )
         for s in result.staffing:
             console.print(
@@ -228,7 +281,7 @@ def start_cmd(
                 f"  - 検証提案 リスク={vr.risk_level} 必須={vr.required_review_types}"
             )
         console.print("")
-        console.print(result.summary)
+        console.print(result.summary, markup=False)
         if autonomous:
             from ai_company.services.autonomous import run_autonomous
 
@@ -249,13 +302,14 @@ def start_cmd(
                 "idle_incomplete": "実行可能タスクなし（未完了）",
                 "max_cycles": "最大サイクル到達",
                 "all_implementation_done": "実装完了",
+                "budget_wait": "予算待ち（時間枠の上限）",
             }.get(auto.stopped_reason, auto.stopped_reason)
             console.print(
                 f"[cyan]自動実行[/cyan] サイクル={auto.cycles} "
                 f"開始数={auto.started_total} 停止理由={stop_ja} "
                 f"リリース候補={auto.release_candidate_id or 'なし'}"
             )
-            console.print(human_summary(session, project_id=result.project.id))
+            console.print(human_summary(session, project_id=result.project.id), markup=False)
             console.print("")
             console.print(
                 human_next_actions(
@@ -263,7 +317,8 @@ def start_cmd(
                     project_id=result.project.id,
                     stopped_reason=auto.stopped_reason,
                     runner=runner,
-                )
+                ),
+                markup=False,
             )
         elif dispatch:
             # Dispatch is owned by CLI → Scheduler, not Secretary.
@@ -273,7 +328,7 @@ def start_cmd(
                 f"[cyan]スケジューラ実行[/cyan] 方式={runner_ja(runner)} "
                 f"開始={sched.started} 拒否={sched.denied} 抑制={sched.throttled}"
             )
-            console.print(human_summary(session, project_id=result.project.id))
+            console.print(human_summary(session, project_id=result.project.id), markup=False)
 
 
 @app.command("status")
@@ -289,13 +344,28 @@ def status_cmd(
     ),
 ) -> None:
     with session_scope() as session:
-        console.print(human_summary(session, project_id=project))
+        console.print(human_summary(session, project_id=project), markup=False)
         if guide:
+            from sqlalchemy import select
+
+            from ai_company.db.models import Project
+            from ai_company.services.secretary import infer_runner
+
+            # Same project as the summary above (latest when omitted), so the
+            # resume command can name it (--project) and its runner (N-1/N-3).
+            pid = project or session.scalar(
+                select(Project.id).order_by(Project.created_at.desc()).limit(1)
+            )
             console.print("")
-            console.print(human_next_actions(session, project_id=project))
+            console.print(
+                human_next_actions(
+                    session, project_id=pid, runner=infer_runner(session, pid)
+                ),
+                markup=False,
+            )
         if debug_enabled(flag=debug):
             console.print("")
-            console.print(stuck_trace(session, project_id=project))
+            console.print(stuck_trace(session, project_id=project), markup=False)
 
 
 debug_app = typer.Typer(help="Development debug / trace dumps")
@@ -308,7 +378,7 @@ def debug_stuck_cmd(
 ) -> None:
     """Dump BLOCKED / PENDING / runtime paths for investigation."""
     with session_scope() as session:
-        console.print(stuck_trace(session, project_id=project))
+        console.print(stuck_trace(session, project_id=project), markup=False)
 
 
 @debug_app.command("task")
@@ -317,13 +387,96 @@ def debug_task_cmd(
 ) -> None:
     """Dump validation / judge / approval / audit trace for one task."""
     with session_scope() as session:
-        console.print(task_trace(session, task_id))
+        console.print(task_trace(session, task_id), markup=False)
 
 
 @app.command("roles")
 def roles_cmd() -> None:
     """Show AI employee roles, layers, and who reports to whom."""
-    console.print(org_chart_text())
+    console.print(org_chart_text(), markup=False)
+
+
+@app.command("org")
+def org_cmd() -> None:
+    """Show departments (部) → sections (課) → roles, and department heads."""
+    from ai_company.org import org_tree_text
+
+    console.print(org_tree_text(), markup=False)
+
+
+@app.command("meeting")
+def meeting_cmd(
+    goal: str = typer.Argument(..., help="社長の依頼（重役会議の議題）"),
+    all_departments: bool = typer.Option(
+        False, "--all-departments", help="全部長を招集する"
+    ),
+) -> None:
+    """Preview the executive meeting minutes for a goal (no DB writes)."""
+    from ai_company.services.executive_meeting import (
+        convene_executive_meeting,
+        render_minutes_markdown,
+    )
+    from ai_company.services.secretary import understand_goal
+
+    minutes = convene_executive_meeting(
+        understand_goal(goal), all_departments=all_departments
+    )
+    console.print(render_minutes_markdown(minutes), markup=False)
+
+
+@app.command("decide")
+def decide_cmd(
+    number: int = typer.Argument(..., help="status に出る会議の確認事項の番号（#n）"),
+    answer: str = typer.Argument(..., help="社長の回答・決定"),
+    project: str | None = typer.Option(None, "--project", help="Project id（省略時は最新）"),
+) -> None:
+    """Answer / resolve an executive-meeting open question (社長の回答)."""
+    from sqlalchemy import select
+
+    from ai_company.db.models import Project
+    from ai_company.services.secretary import resolve_meeting_question
+
+    with session_scope() as session:
+        proj = (
+            session.get(Project, project)
+            if project
+            else session.scalar(select(Project).order_by(Project.created_at.desc()).limit(1))
+        )
+        if proj is None:
+            console.print("[red]案件が見つかりません[/red]")
+            raise typer.Exit(code=2)
+        try:
+            question = resolve_meeting_question(
+                session, project_id=proj.id, number=number, answer=answer
+            )
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=2) from exc
+        console.print(f"解決済み #{number}: {question}", markup=False)
+        from ai_company.services.decisions import apply_latest_decision
+
+        applied = apply_latest_decision(session, project_id=proj.id, question=question)
+        if applied is not None:
+            targets = ["後続 Worker のプロンプト（President Decisions）"]
+            targets += [f"改訂タスク {tid}" for tid in applied.revision_task_ids]
+            console.print("反映先: " + "、".join(targets), markup=False)
+            for note in applied.skipped:
+                console.print(f"  - {note}", markup=False)
+            if applied.reopened:
+                from ai_company.services.secretary import (
+                    infer_runner,
+                    scheduler_continue_command,
+                )
+
+                console.print(
+                    "案件を再開しました（完了 → 進行中）。改訂タスクを実行し、"
+                    "完了後にリリース候補を作り直します:",
+                    markup=False,
+                )
+                console.print(
+                    "   " + scheduler_continue_command(infer_runner(session, proj.id), proj.id),
+                    markup=False,
+                )
 
 
 @app.command("ask")
@@ -332,7 +485,7 @@ def ask_cmd(
     project: str | None = typer.Option(None, "--project"),
 ) -> None:
     with session_scope() as session:
-        console.print(answer_question(session, question, project_id=project))
+        console.print(answer_question(session, question, project_id=project), markup=False)
 
 
 validation_app = typer.Typer(help="Validation / Judge status")
@@ -387,19 +540,36 @@ def task_create(
 @task_app.command("list")
 def task_list(
     status: str | None = typer.Option(None, "--status"),
+    dept: str | None = typer.Option(
+        None,
+        "--dept",
+        help="部で絞り込む（部 id 例: development / legal、または部名 例: 法務部）",
+    ),
 ) -> None:
+    from ai_company.org import DEPARTMENTS, unit_label
+
+    dept_id: str | None = None
+    if dept:
+        match = [d for d in DEPARTMENTS if dept in (d.id, d.name_ja)]
+        if not match:
+            known = "、".join(f"{d.id}({d.name_ja})" for d in DEPARTMENTS)
+            console.print(f"[red]不明な部です:[/red] {escape(dept)}  候補: {known}")
+            raise typer.Exit(code=2)
+        dept_id = match[0].id
     with session_scope() as session:
-        tasks = list_tasks(session, status=status)
+        tasks = list_tasks(session, status=status, department_id=dept_id)
         table = Table(title="Tasks")
         table.add_column("ID")
         table.add_column("Title")
+        table.add_column("部／課")
         table.add_column("Status")
         table.add_column("Priority")
         table.add_column("Retries")
         for t in tasks:
             table.add_row(
                 t.id,
-                t.title,
+                escape(single_line(t.title)),
+                unit_label(t.department_id, t.section_id),
                 t.status,
                 str(t.priority),
                 f"{t.retry_count}/{t.max_retries}",
@@ -439,7 +609,8 @@ def task_handoff_manager(
             )
         console.print("")
         console.print(
-            human_next_actions(session, runner=runner, stopped_reason="scheduler_pause")
+            human_next_actions(session, runner=runner, stopped_reason="scheduler_pause"),
+            markup=False,
         )
 
 
@@ -474,13 +645,15 @@ def task_fire_supervisor(
             fired_role=task.role_required,
             actor_id="human:owner",
         )
+        root_title = escape(single_line(root.title))
         console.print(
-            f"[green]解雇→出荷[/green] {root.id}「{root.title}」を完了にしました。"
+            f"[green]解雇→出荷[/green] {root.id}「{root_title}」を完了にしました。"
             " 依存タスクが解放されます。"
         )
         console.print("")
         console.print(
-            human_next_actions(session, runner=runner, stopped_reason="scheduler_pause")
+            human_next_actions(session, runner=runner, stopped_reason="scheduler_pause"),
+            markup=False,
         )
 
 
@@ -518,7 +691,8 @@ def scheduler_run_once(
                 runner=runner,
                 throttled=result.throttled,
                 started=result.started,
-            )
+            ),
+            markup=False,
         )
 
 
@@ -557,11 +731,18 @@ def scheduler_continue(
             "idle_incomplete": "実行できるタスクなし",
             "max_cycles": "最大サイクル到達",
             "all_implementation_done": "実装すべて完了",
+            "budget_wait": "予算待ち（時間枠の上限）",
         }.get(auto.stopped_reason, auto.stopped_reason)
         console.print(
             f"[cyan]継続実行[/cyan] 方式={runner_ja(runner)} "
             f"サイクル={auto.cycles} 開始合計={auto.started_total} 停止理由={stop_ja}"
         )
+        if auto.release_candidate_ids:
+            console.print(
+                f"リリース候補: {len(auto.release_candidate_ids)} 件", markup=False
+            )
+            for art_id in auto.release_candidate_ids:
+                console.print(f"  - {art_id}", markup=False)
         console.print("")
         console.print(
             human_next_actions(
@@ -569,7 +750,8 @@ def scheduler_continue(
                 project_id=project,
                 stopped_reason=auto.stopped_reason,
                 runner=runner,
-            )
+            ),
+            markup=False,
         )
 
 
@@ -714,7 +896,9 @@ def approval_list(
         table.add_column("Status")
         table.add_column("Reason")
         for r in rows:
-            table.add_row(r.id, r.action, r.status, r.reason[:80])
+            table.add_row(
+                escape(r.id), escape(r.action), escape(r.status), escape(single_line(r.reason)[:80])
+            )
         console.print(table)
         if (status or "").upper() == "PENDING" and rows:
             console.print("")
@@ -747,7 +931,8 @@ def approval_resolve(
                 session,
                 stopped_reason="scheduler_pause" if approve else None,
                 runner=runner,
-            )
+            ),
+            markup=False,
         )
 
 

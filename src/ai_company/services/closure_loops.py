@@ -13,6 +13,7 @@ from ai_company.db.models import Project, Task
 from ai_company.enums import TaskKind, TaskStatus
 from ai_company.services.audit import record_audit
 from ai_company.services.progress import emit as progress
+from ai_company.services.redact import multi_line, redact_text, single_line
 from ai_company.services.staffing import ensure_staffing_request
 from ai_company.services.tasks import create_task
 
@@ -55,6 +56,16 @@ _PHASE_ORDER = (
     ("sales", TaskKind.SALES_AUDIT, "sales"),
     ("maintenance", TaskKind.MAINTENANCE_AUDIT, "maintenance"),
 )
+
+# 自問監査（LLM）の提案は、書き込み権限のある実装タスクになる。
+# 担当は開発部の実装ロールに限る（秘書・部長・社長・検証役などを名乗らせない）。
+GAP_FIX_ROLES = frozenset({"coding_worker", "backend_engineer", "frontend_engineer"})
+# 1回の監査結果から起票する上限（連鎖で起票が膨らむのを防ぐ）
+MAX_PROPOSED_PER_RESULT = 5
+# 監査（LLM）からの起票は high まで。critical は全レビューが付きコストが膨らむため、
+# 秘書・社長の判断に限る（LLM 出力で検証コストを増やせないようにする）。
+_RISK_LEVELS = frozenset({"low", "medium", "high"})
+_RISK_CAPPED = {"critical": "high"}
 
 _OPEN = {
     TaskStatus.BACKLOG,
@@ -115,6 +126,14 @@ def _open_closure_tasks(session: Session, project_id: str) -> list[Task]:
                 Task.kind.in_(tuple(CLOSURE_KINDS)),
             )
         ).all()
+        if t.status in _OPEN
+    ]
+
+
+def _open_department_work(session: Session, project_id: str) -> list[Task]:
+    return [
+        t
+        for t in _tasks_of_kind(session, project_id, TaskKind.DEPARTMENT_WORK.value)
         if t.status in _OPEN
     ]
 
@@ -189,13 +208,13 @@ def _phase_objectives(phase_key: str, goal: str, round_n: int) -> tuple[str, str
         )
         acceptance = "運用・権限タスクを出した、または CLEAR"
     elif phase_key == "compliance":
-        title = f"法務・合规ミニレビュー #{round_n}"
+        title = f"法務・コンプライアンス ミニレビュー #{round_n}"
         objective = (
-            f"Goal「{goal}」を法務・合规の最小観点で点検せよ。\n"
+            f"Goal「{goal}」を法務・コンプライアンスの最小観点で点検せよ。\n"
             "個人情報・労働法制・監査ログ・同意・権限分離で穴はないか？\n"
             "必須の是正があれば proposed_tasks。無ければ CLEAR。"
         )
-        acceptance = "合规是正タスクを出した、または CLEAR"
+        acceptance = "コンプライアンス是正タスクを出した、または CLEAR"
     elif phase_key == "test_audit":
         title = f"テスト監査 #{round_n}"
         objective = (
@@ -208,7 +227,7 @@ def _phase_objectives(phase_key: str, goal: str, round_n: int) -> tuple[str, str
     elif phase_key == "quality":
         title = f"品質向上レビュー #{round_n}"
         objective = (
-            f"Goal「{goal}」の完成品について品質向上部がレビューせよ。\n"
+            f"Goal「{goal}」の完成品について品質保証部／品質監査課がレビューせよ。\n"
             "本当にこれでよかったか？ 改善できるところは無いか？\n"
             "信頼性・保守性・セキュリティ残留・テストの穴・観測性を見よ。\n"
             "改善があれば proposed_tasks。無ければ CLEAR。"
@@ -314,6 +333,16 @@ def maybe_spawn_closure_loop(
         return None
     if _open_closure_tasks(session, project_id):
         return None
+    from ai_company.services.head_briefs import open_head_briefs, settle_stalled_head_briefs
+
+    # 停止した部長所見はテンプレートへ戻して閉じる（リリースを止めない）
+    settle_stalled_head_briefs(session, project_id=project_id, config=cfg)
+    if open_head_briefs(session, project_id):
+        # 部長所見がまだ出ていない: その部の部門作業が起票される前に監査しない
+        return None
+    if _open_department_work(session, project_id):
+        # 会議の部門作業指示の成果物を、監査が見られるように待つ
+        return None
 
     project = session.get(Project, project_id)
     goal = project.goal if project else project_id
@@ -413,38 +442,58 @@ def apply_closure_result(
 
     constraints = _constraints_dict(task)
     constraints["closure_verdict"] = verdict
-    constraints["closure_summary"] = str(payload.get("summary") or "")[:2000]
+    # Stored redacted, same policy as department_work summaries (S-2).
+    constraints["closure_summary"] = multi_line(
+        redact_text(str(payload.get("summary") or ""))
+    )[:2000]
     _set_constraints(task, constraints)
     task.status = TaskStatus.DONE
     session.flush()
 
     created: list[str] = []
+    coerced: list[str] = []
+    capped: list[int] = []  # proposal numbers whose risk was capped critical → high
+    dropped = 0
     if verdict == "GAPS":
         proposed = payload.get("proposed_tasks") or []
         if not isinstance(proposed, list):
             proposed = []
+        if len(proposed) > MAX_PROPOSED_PER_RESULT:
+            dropped = len(proposed) - MAX_PROPOSED_PER_RESULT
+            proposed = proposed[:MAX_PROPOSED_PER_RESULT]
         for i, item in enumerate(proposed):
             if not isinstance(item, dict):
                 continue
-            title = str(item.get("title") or f"Gap fix from {task.title} #{i + 1}").strip()
+            # Audit output is untrusted LLM text: one line, bounded length.
+            # title is embedded in other prompts / lists → one line + redacted
+            title = single_line(
+                redact_text(str(item.get("title") or f"Gap fix from {task.title} #{i + 1}"))
+            )
             if not title:
                 continue
-            role = (
-                str(item.get("role_required") or "coding_worker").strip()
-                or "coding_worker"
-            )
+            requested = single_line(item.get("role_required") or "coding_worker")
+            role = requested if requested in GAP_FIX_ROLES else "coding_worker"
+            if role != requested:
+                coerced.append(redact_text(requested)[:64])
+            risk = single_line(item.get("risk_level") or "medium").lower()
+            if risk in _RISK_CAPPED:
+                capped.append(i + 1)
+                risk = _RISK_CAPPED[risk]
             child = create_task(
                 session,
                 title=title[:120],
                 priority=min(100, 80 + i),
                 project_id=task.project_id,
-                objective=str(item.get("objective") or title),
+                # the task's own instructions: keep line structure, drop controls, redact
+                objective=multi_line(redact_text(str(item.get("objective") or title)))[:2000],
                 role_required=role,
                 kind=TaskKind.IMPLEMENTATION,
-                risk_level=str(item.get("risk_level") or "medium"),
-                acceptance_criteria=str(
-                    item.get("acceptance_criteria") or "Gap closed and verifiable"
-                ),
+                risk_level=risk if risk in _RISK_LEVELS else "medium",
+                acceptance_criteria=multi_line(
+                    redact_text(
+                        str(item.get("acceptance_criteria") or "Gap closed and verifiable")
+                    )
+                )[:2000],
                 parent_task_id=task.id,
                 estimated_cost=0.0,
                 config=cfg,
@@ -464,6 +513,10 @@ def apply_closure_result(
         metadata={
             "verdict": verdict,
             "created_tasks": created,
+            # roles the audit asked for that are not 開発部 implementers
+            "coerced_roles": coerced,
+            "dropped_proposals": dropped,
+            "risk_capped": capped,
             "phase": constraints.get("closure_phase"),
             "round": constraints.get("closure_round"),
         },

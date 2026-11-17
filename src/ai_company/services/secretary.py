@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -14,6 +15,12 @@ from ai_company.enums import StaffingStatus, TaskStatus
 from ai_company.ids import new_id
 from ai_company.services.audit import record_audit
 from ai_company.services.cost_governor import count_active_workers, get_budget_snapshot
+from ai_company.services.executive_meeting import (
+    MeetingMinutes,
+    convene_executive_meeting,
+    record_executive_meeting,
+)
+from ai_company.services.redact import single_line
 from ai_company.services.tasks import create_project, create_task
 
 # Hard ban: this module must never import process runners or worker dispatch.
@@ -30,6 +37,7 @@ class TaskProposal:
     estimated_cost: float = 0.0
     risk_level: str = "medium"
     acceptance_criteria: str = ""
+    kind: str = "implementation"
 
 
 @dataclass
@@ -66,6 +74,13 @@ class StartResult:
     staffing: list[StaffingRequest]
     summary: str
     validation_requests: list[ValidationRequestProposal] = field(default_factory=list)
+    meeting: MeetingMinutes | None = None
+    # 会議の決議から起票した部門作業（kind=department_work）
+    work_order_tasks: list[Task] = field(default_factory=list)
+    # 部長所見タスク（executive_meeting.head_llm.enabled のときだけ。既定は空）
+    head_brief_tasks: list[Task] = field(default_factory=list)
+    # 部長所見を起票しなかった部 → 理由（権限プロファイル無し・人数上限など）
+    head_brief_skipped: dict[str, str] = field(default_factory=dict)
 
 
 def classify_risk(text: str, *, default: str = "medium") -> str:
@@ -387,9 +402,15 @@ def apply_plan(
     plan: GoalPlan,
     *,
     config: AppConfig | None = None,
+    minutes: MeetingMinutes | None = None,
 ) -> StartResult:
-    """Persist project, tasks, staffing. Does not start workers."""
+    """Persist project, tasks, staffing. Does not start workers.
+
+    When executive-meeting ``minutes`` are given, each task is filed in the
+    部/課 the meeting decided (not re-derived), so minutes and DB always agree.
+    """
     cfg = config or load_config()
+    decided = {a.task_title: a for a in (minutes.assignments if minutes else [])}
     project = create_project(session, name=plan.project_name, goal=plan.goal)
     record_audit(
         session,
@@ -410,6 +431,7 @@ def apply_plan(
     tasks: list[Task] = []
     for proposal in plan.tasks:
         depends = [title_to_id[t] for t in proposal.depends_on_titles if t in title_to_id]
+        unit = decided.get(proposal.title)
         task = create_task(
             session,
             title=proposal.title,
@@ -421,6 +443,9 @@ def apply_plan(
             depends_on=depends or None,
             risk_level=proposal.risk_level,
             acceptance_criteria=proposal.acceptance_criteria or None,
+            kind=proposal.kind,
+            department_id=unit.department_id if unit else None,
+            section_id=unit.section_id if unit else None,
             config=cfg,
         )
         record_audit(
@@ -481,9 +506,47 @@ def start_goal(
     goal: str,
     *,
     config: AppConfig | None = None,
+    hold_meeting: bool = True,
+    all_departments: bool = False,
 ) -> StartResult:
+    """社長の依頼 → 秘書が計画 → 重役会議で部/課へ割り当て → タスク起票."""
+    cfg = config or load_config()
     plan = understand_goal(goal)
-    return apply_plan(session, plan, config=config)
+    if not hold_meeting:
+        return apply_plan(session, plan, config=cfg)
+    # 重役会議が先に部/課を決め、秘書はその決議どおりに起票する（M-3）。
+    minutes = convene_executive_meeting(plan, config=cfg, all_departments=all_departments)
+    result = apply_plan(session, plan, config=cfg, minutes=minutes)
+    result.meeting = record_executive_meeting(
+        session, minutes, project_id=result.project.id
+    )
+    orders_now = list(minutes.work_orders)
+    if cfg.settings.executive_meeting.head_llm.enabled:
+        # 任意機能: 対象部の部長に所見を求め、その部のテンプレート指示は保留する。
+        # 部長 Worker の起動は Scheduler 経由（秘書は起動しない）。
+        from ai_company.services.head_briefs import issue_head_briefs
+
+        briefs = issue_head_briefs(
+            session, project_id=result.project.id, minutes=minutes, config=cfg
+        )
+        result.head_brief_tasks = briefs.tasks
+        result.head_brief_skipped = dict(briefs.skipped)
+        orders_now = [o for o in orders_now if o.department_id not in briefs.held]
+    if orders_now or minutes.deferred_orders:
+        from ai_company.services.department_orders import issue_work_orders
+
+        issued = issue_work_orders(
+            session,
+            project_id=result.project.id,
+            orders=orders_now,
+            deferred=minutes.deferred_orders,
+            config=cfg,
+        )
+        result.work_order_tasks = issued.issued
+    # 要約は会議の決議（部門作業・部長所見）を起票した後の状態で作り直す
+    session.flush()
+    result.summary = human_summary(session, project_id=result.project.id)
+    return result
 
 
 def _task_counts(session: Session, project_id: str | None = None) -> Counter[str]:
@@ -549,6 +612,145 @@ def project_delivery_phase(session: Session, project: Project | None) -> str:
     return "implementing"
 
 
+def _all_meeting_questions(session: Session, project_id: str) -> list[str]:
+    """重役会議と部長所見で出た「社長・専門家への確認事項」（全件・伏せ字化済み・重複なし）.
+
+    The list order is stable (meeting first, then briefs in filing order), so the
+    1-based position is the number used by ``ai-company decide``.
+
+    Sources: the latest ``executive_meeting_held`` audit event of the project
+    (template minutes) and applied ``head_brief`` tasks (``head_open_questions``).
+    """
+    from ai_company.db.models import AuditEvent
+    from ai_company.org import DEPARTMENTS
+    from ai_company.services.redact import redact_text
+
+    found: list[str] = []
+    event = session.scalar(
+        select(AuditEvent)
+        .where(
+            AuditEvent.event_type == "executive_meeting_held",
+            AuditEvent.target_id == project_id,
+        )
+        .order_by(AuditEvent.created_at.desc())
+        .limit(1)
+    )
+    meta = (event.metadata_json or {}) if event else {}
+    for q in meta.get("open_questions") or []:
+        if isinstance(q, str) and q.strip():
+            found.append(q.strip())
+
+    names = {d.id: d.name_ja for d in DEPARTMENTS}
+    briefs = session.scalars(
+        select(Task)
+        .where(Task.project_id == project_id, Task.kind == "head_brief")
+        .order_by(Task.created_at.asc())
+    ).all()
+    for task in briefs:
+        try:
+            data = json.loads(task.constraints or "{}")
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        dept = names.get(str(task.department_id), "部長")
+        for q in data.get("head_open_questions") or []:
+            text = q.get("question") if isinstance(q, dict) else q
+            if not isinstance(text, str) or not text.strip():
+                continue
+            who = (
+                "社長"
+                if isinstance(q, dict) and q.get("decider") == "president"
+                else "専門家／担当部署"
+            )
+            found.append(f"{dept}（{who}）: {text.strip()}")
+
+    out: list[str] = []
+    for q in found:
+        line = single_line(redact_text(q))[:200]
+        if line and line not in out:
+            out.append(line)
+    return out
+
+
+MEETING_QUESTION_RESOLVED = "meeting_question_resolved"
+
+
+def resolved_meeting_questions(session: Session, project_id: str) -> dict[str, str]:
+    """Resolved question text → (redacted) answer, from audit events."""
+    from ai_company.db.models import AuditEvent
+
+    resolved: dict[str, str] = {}
+    for event in session.scalars(
+        select(AuditEvent).where(
+            AuditEvent.event_type == MEETING_QUESTION_RESOLVED,
+            AuditEvent.target_type == "project",
+            AuditEvent.target_id == project_id,
+        )
+    ).all():
+        meta = event.metadata_json or {}
+        q = meta.get("question")
+        if isinstance(q, str) and q:
+            resolved[q] = str(meta.get("answer") or "")
+    return resolved
+
+
+def numbered_meeting_questions(
+    session: Session, project_id: str, *, include_resolved: bool = False
+) -> list[tuple[int, str]]:
+    """(番号, 確認事項). Numbers stay the same after other questions are resolved."""
+    done = set() if include_resolved else set(resolved_meeting_questions(session, project_id))
+    return [
+        (n, q)
+        for n, q in enumerate(_all_meeting_questions(session, project_id), 1)
+        if q not in done
+    ]
+
+
+def meeting_open_questions(session: Session, project_id: str, *, limit: int = 10) -> list[str]:
+    """未解決の確認事項（表示用・伏せ字化済み）."""
+    return [q for _, q in numbered_meeting_questions(session, project_id)][:limit]
+
+
+def resolve_meeting_question(
+    session: Session, *, project_id: str, number: int, answer: str
+) -> str:
+    """社長が確認事項に回答し、解決済みにする（監査イベントを記録）.
+
+    Returns the resolved question. Raises ``ValueError`` for an unknown number,
+    an already-resolved question, or an empty answer.
+    """
+    from ai_company.services.decisions import department_of_question, question_key
+    from ai_company.services.redact import redact_text
+
+    answer = " ".join((answer or "").split())
+    if not answer:
+        raise ValueError("回答が空です")
+    questions = _all_meeting_questions(session, project_id)
+    if not 1 <= number <= len(questions):
+        raise ValueError(f"確認事項 #{number} はありません（1〜{len(questions)}）")
+    question = questions[number - 1]
+    if question in resolved_meeting_questions(session, project_id):
+        raise ValueError(f"確認事項 #{number} は解決済みです")
+    record_audit(
+        session,
+        event_type=MEETING_QUESTION_RESOLVED,
+        actor_type="human",
+        actor_id="human_owner",
+        target_type="project",
+        target_id=project_id,
+        metadata={
+            "number": number,
+            "question": question,
+            "question_key": question_key(question),
+            "department_id": department_of_question(question),
+            "answer": redact_text(answer)[:500],
+        },
+    )
+    session.flush()
+    return question
+
+
 def human_summary(session: Session, *, project_id: str | None = None) -> str:
     """人が読む状況要約（日本語）。"""
     from ai_company.ui_ja import status_ja
@@ -565,6 +767,7 @@ def human_summary(session: Session, *, project_id: str | None = None) -> str:
     blocked = counts.get(TaskStatus.BLOCKED, 0)
     deferred = counts.get(TaskStatus.DEFERRED_BUDGET, 0)
     decisions = blocked + deferred
+    questions = numbered_meeting_questions(session, project.id) if project else []
 
     staffing_stmt = (
         select(func.count())
@@ -649,13 +852,28 @@ def human_summary(session: Session, *, project_id: str | None = None) -> str:
                 if snap.hard_limit <= 0
                 else f"ハード上限の残り: ${snap.usable:.2f}"
             ),
-            f"人間の判断が必要: {decisions}",
+            f"人間の判断が必要: {decisions + len(questions)}"
+            + (
+                f"（停止・予算待ち {decisions} / 会議の確認事項 {len(questions)}）"
+                if questions
+                else ""
+            ),
+            # plain text: the CLI prints this summary with markup=False (no escape here)
+            *[f"  - 会議の確認事項 #{n}: {q}" for n, q in questions[:10]],
+            *(
+                ['    → 回答: ai-company decide <番号> "回答"（解決済みは表示から外れます）']
+                if questions
+                else []
+            ),
             "",
             "例外:",
             exception_digest(session, project_id=project.id if project else None),
             "",
             "対応状況（誰が扱っているか）:",
             responsibility_digest(session, project_id=project.id if project else None),
+            "",
+            "部門別の状況（部／課）:",
+            department_digest(session, project_id=project.id if project else None),
         ]
     )
     if decisions:
@@ -667,6 +885,74 @@ def human_summary(session: Session, *, project_id: str | None = None) -> str:
     lines.append(
         "注: 実装キューが空でも、残件／使い勝手／品質の自問ループが終わるまでリリースしません。"
     )
+    return "\n".join(lines)
+
+
+_OPEN_STATUSES = (
+    TaskStatus.BACKLOG,
+    TaskStatus.READY,
+    TaskStatus.WAITING,
+    TaskStatus.RUNNING,
+    TaskStatus.REVIEW_REQUIRED,
+)
+_STOPPED_STATUSES = (TaskStatus.BLOCKED, TaskStatus.DEFERRED_BUDGET)
+
+
+def department_workload(
+    session: Session, *, project_id: str | None = None
+) -> list[dict[str, object]]:
+    """Task counts per 部/課 (stored on Task), in org-chart order.
+
+    Each row: ``{"department_id", "section_id", "label", "done", "open",
+    "stopped", "total"}``. Units with no tasks are omitted.
+    """
+    from ai_company.org import DEPARTMENTS, unit_label
+
+    stmt = select(Task.department_id, Task.section_id, Task.status, func.count()).group_by(
+        Task.department_id, Task.section_id, Task.status
+    )
+    if project_id:
+        stmt = stmt.where(Task.project_id == project_id)
+    buckets: dict[tuple[str | None, str | None], Counter[str]] = {}
+    for dept_id, section_id, status, count in session.execute(stmt).all():
+        buckets.setdefault((dept_id, section_id), Counter())[str(status)] += int(count)
+
+    order: dict[tuple[str | None, str | None], int] = {}
+    for d_i, dept in enumerate(DEPARTMENTS):
+        order[(dept.id, None)] = d_i * 100
+        for s_i, section in enumerate(dept.sections, 1):
+            order[(dept.id, section.id)] = d_i * 100 + s_i
+
+    rows: list[dict[str, object]] = []
+    for key in sorted(buckets, key=lambda k: (order.get(k, 10_000), str(k))):
+        c = buckets[key]
+        open_n = sum(c.get(st, 0) for st in _OPEN_STATUSES)
+        stopped = sum(c.get(st, 0) for st in _STOPPED_STATUSES)
+        rows.append(
+            {
+                "department_id": key[0],
+                "section_id": key[1],
+                "label": unit_label(key[0], key[1]),
+                "done": c.get(TaskStatus.DONE, 0),
+                "open": open_n,
+                "stopped": stopped,
+                "total": sum(c.values()),
+            }
+        )
+    return rows
+
+
+def department_digest(session: Session, *, project_id: str | None = None) -> str:
+    rows = department_workload(session, project_id=project_id)
+    if not rows:
+        return "  （タスクなし）"
+    lines = []
+    for r in rows:
+        stop = f"  停止 {r['stopped']}" if r["stopped"] else ""
+        lines.append(
+            f"  {r['label']}: 完了 {r['done']} / 進行中・待ち {r['open']}{stop}"
+            f"（計 {r['total']}）"
+        )
     return "\n".join(lines)
 
 
@@ -833,6 +1119,37 @@ def _explain_block_reason(reason: str) -> str:
     return f"システムが人間判断を要求しています（詳細: {r[:160]}）。" + suffix
 
 
+def scheduler_continue_command(runner: str, project_id: str | None) -> str:
+    """The resume command shown to the human (with ``--project`` when known).
+
+    Without ``--project`` the continue loop cannot attribute completion to one
+    project, so the guidance always names it when the caller knows it.
+    """
+    cmd = f"ai-company scheduler continue --runner {runner}"
+    return f"{cmd} --project {project_id}" if project_id else cmd
+
+
+def infer_runner(
+    session: Session, project_id: str | None = None, *, default: str = "cursor"
+) -> str:
+    """Runner of the most recent execution (``mock`` / ``cursor``), else ``default``."""
+    from ai_company.db.models import Execution
+
+    stmt = select(Execution.runner_kind).join(Task, Task.id == Execution.task_id)
+    if project_id:
+        stmt = stmt.where(Task.project_id == project_id)
+    kind = session.scalar(
+        stmt.order_by(Execution.started_at.desc(), Execution.id.desc()).limit(1)
+    )
+    return kind if kind in {"mock", "cursor"} else default
+
+
+def _cheapest(tasks: list[Task]) -> float:
+    """Smallest estimate among held tasks (DEFERRED first) — mirrors ``autonomous`` (L-2)."""
+    costs = [float(t.estimated_cost or 0.0) for t in tasks]
+    return min(costs) if costs else 0.0
+
+
 def human_next_actions(
     session: Session,
     *,
@@ -867,6 +1184,7 @@ def human_next_actions(
         ).all()
     )
 
+    continue_cmd = scheduler_continue_command(runner, project_id)
     lines: list[str] = ["【いまの状態】"]
     reason_map = {
         "blocked_exception": "停止タスクがあり、自動実行を安全のため中断しました。",
@@ -880,6 +1198,10 @@ def human_next_actions(
         "scheduler_pause": "スケジューラが1サイクル終了しました（ここは正常な一区切りです）。",
         "closure_running": "実装キューは空ですが、Goal完了前の自問ループが実行中です。",
         "release_ready": "自問まで完了し、リリース候補の状態です。",
+        "budget_wait": (
+            "予算待ち（時間枠の上限）のため停止しました。"
+            "同じ時間枠の中で再試行しても進まないため、空回りせずに止めています。"
+        ),
     }
     if project_id:
         proj = session.get(Project, project_id)
@@ -890,6 +1212,23 @@ def human_next_actions(
             stopped_reason = "closure_running"
         elif phase == "release_ready" and not stopped_reason:
             stopped_reason = "release_ready"
+    # 自問ループ中（closure_running）でも、READY が時間枠の上限で止まっていれば
+    # 「待てば進む」は誤りなので予算待ちを優先して案内する（R-1）。
+    if (
+        stopped_reason in (None, "closure_running")
+        and (ready or deferred)
+        and not pending
+        and not blocked
+    ):
+        # 単独の `status` でも、時間枠の上限に達していれば予算待ちとして案内する
+        from ai_company.services.cost_governor import budget_window_wait
+
+        if budget_window_wait(session, next_cost=_cheapest(deferred or ready)) is not None:
+            stopped_reason = "budget_wait"
+            reason_map["budget_wait"] = (
+                "予算待ち（時間枠の上限）です。"
+                "同じ時間枠の中で再試行しても進まないため、時間枠が進むのを待ちます。"
+            )
     if stopped_reason:
         lines.append(f"- {reason_map.get(stopped_reason, stopped_reason)}")
     if throttled > 0:
@@ -975,7 +1314,7 @@ def human_next_actions(
             )
         lines.append("")
         lines.append("3) 承認後、同じディレクトリで継続実行（人が毎回回す必要なし）:")
-        lines.append(f"   ai-company scheduler continue --runner {runner}")
+        lines.append(f"   {continue_cmd}")
         return "\n".join(lines)
 
     if blocked and not pending:
@@ -987,7 +1326,7 @@ def human_next_actions(
         lines.append("いまやることは、次のいずれかです。")
         lines.append("")
         lines.append("A) 直近上司（実装マネージャー）に戻して直させる:")
-        lines.append(f"   ai-company scheduler continue --runner {runner}")
+        lines.append(f"   {continue_cmd}")
         for t in blocked:
             lines.append(f"   ai-company task handoff-manager {t.id}")
         lines.append("")
@@ -1001,12 +1340,42 @@ def human_next_actions(
             lines.append(f"   ai-company debug task {t.id}")
         return "\n".join(lines)
 
+    # Priority 1.5: rolling-window budget cap → wait, then continue (not a spin)
+    if stopped_reason == "budget_wait":
+        from ai_company.services.cost_governor import budget_window_wait
+
+        wait = budget_window_wait(session, next_cost=_cheapest(deferred or ready))
+        if wait is None:
+            lines.append("時間枠の上限はすでに解除されています。続きを実行できます:")
+        else:
+            mins = wait.wait_minutes()
+            eta = (
+                f"約{mins}分後（{wait.resume_at_local_text()} 頃）"
+                if mins is not None
+                else "時間枠が進んだ後"
+            )
+            lines.append(
+                f"{wait.reason_ja}（{wait.used:g} / {wait.limit:g}）に達しています。"
+                "これは暴走防止の仕組みで、故障ではありません。"
+            )
+            lines.append(f"{eta}に、次を一度実行すれば続きから再開します:")
+        lines.append("")
+        lines.append(f"   {continue_cmd}")
+        lines.append("")
+        lines.append(
+            "すぐに進めたい場合は、上限を見直してください"
+            "（config/budget.yaml の budget.hourly / budget.daily）。"
+        )
+        lines.append("状況確認だけするなら:")
+        lines.append("   ai-company status")
+        return "\n".join(lines)
+
     # Priority 2: more work ready / throttled / deferred → machine continues, not human
     if ready or throttled > 0 or review or deferred:
         lines.append("人の操作は不要です。機械側が続ける作業です。")
         lines.append("一度だけ次を実行すれば、承認が要るまで自動で回します:")
         lines.append("")
-        lines.append(f"   ai-company scheduler continue --runner {runner}")
+        lines.append(f"   {continue_cmd}")
         lines.append("")
         lines.append(
             "（`run-once` を毎回打たないでください。THROTTLE は異常ではなく"

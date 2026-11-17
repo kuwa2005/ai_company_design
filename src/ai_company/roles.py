@@ -53,6 +53,44 @@ ROLES: dict[str, RoleDef] = {
         reports_to="human_owner",
         handles="実装マネージャーで解決できない技術判断・部門横断の再計画",
     ),
+    # 部長（department heads）. They attend the executive meeting (重役会議) and
+    # own a department in ``org.py``. They are deliberately NOT in any worker's
+    # reports_to chain, so escalation never spawns a "director replan" worker.
+    "qa_director": RoleDef(
+        id="qa_director",
+        title_ja="品質保証部長",
+        layer="manager",
+        reports_to="human_owner",
+        handles="重役会議で品質基準・検証体制を決め、品質保証部を統括",
+    ),
+    "sales_director": RoleDef(
+        id="sales_director",
+        title_ja="営業部長",
+        layer="manager",
+        reports_to="human_owner",
+        handles="重役会議で売り先・提案・導入定着の方針を決め、営業部を統括",
+    ),
+    "marketing_director": RoleDef(
+        id="marketing_director",
+        title_ja="マーケティング部長",
+        layer="manager",
+        reports_to="human_owner",
+        handles="重役会議で価値提案・優先機能・非目標を決め、マーケティング部を統括",
+    ),
+    "legal_director": RoleDef(
+        id="legal_director",
+        title_ja="法務部長",
+        layer="manager",
+        reports_to="human_owner",
+        handles="重役会議で法令・契約・個人情報リスクを判断し、法務部を統括",
+    ),
+    "operations_director": RoleDef(
+        id="operations_director",
+        title_ja="運用保守部長",
+        layer="manager",
+        reports_to="human_owner",
+        handles="重役会議で運用・保守の前提を決め、運用保守部を統括",
+    ),
     "judge": RoleDef(
         id="judge",
         title_ja="判定",
@@ -146,10 +184,10 @@ ROLES: dict[str, RoleDef] = {
     ),
     "compliance_auditor": RoleDef(
         id="compliance_auditor",
-        title_ja="法務・合规（ミニ）",
+        title_ja="法務・コンプライアンス（ミニ）",
         layer="specialist",
         reports_to="secretary",
-        handles="個人情報・労働法制・監査ログ等の最小合规点検",
+        handles="個人情報・労働法制・監査ログ等の最小コンプライアンス点検",
     ),
     "test_auditor": RoleDef(
         id="test_auditor",
@@ -160,21 +198,21 @@ ROLES: dict[str, RoleDef] = {
     ),
     "quality_auditor": RoleDef(
         id="quality_auditor",
-        title_ja="品質向上部",
+        title_ja="品質監査（品質向上レビュー）",
         layer="specialist",
         reports_to="secretary",
         handles="完成品の品質レビュー（本当にこれでよかったか／改善余地）",
     ),
     "sales": RoleDef(
         id="sales",
-        title_ja="営業（軽量）",
+        title_ja="営業担当",
         layer="specialist",
         reports_to="secretary",
         handles="提案・デモ・価格メモなど売るための最小資料の起票",
     ),
     "maintenance": RoleDef(
         id="maintenance",
-        title_ja="保守部（軽量）",
+        title_ja="保守担当",
         layer="specialist",
         reports_to="secretary",
         handles="保守費・永続運用のための手順／契約前提資料の起票",
@@ -265,8 +303,8 @@ def org_chart_text() -> str:
     lines.append("完了前の自問ルート:")
     lines.append(
         "  実装キュー空 → 残件監査 → プロジェクト推進 → 商品企画 → "
-        "使い勝手 → CS → 情報システム → 法務合规 → テスト監査 → "
-        "品質向上部 → 営業 → 保守部 → リリース"
+        "使い勝手 → CS → 情報システム → 法務・コンプライアンス → テスト監査 → "
+        "品質向上レビュー → 営業 → 保守 → リリース"
     )
     return "\n".join(lines)
 
