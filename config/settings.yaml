@@ -59,9 +59,12 @@ meeting_resolutions:
   departments: [legal, sales, marketing, operations]
   inject_decisions: true                    # 社長の回答（decide）を後続プロンプトへ DATA として渡す
   max_decision_revisions_per_project: 3     # 回答で完了済みの部門作業を改訂する上限（0 = しない）
+  write_deliverables: true                  # 部門の成果物を <案件dir>/docs/<部>/<タスクid>.md に書き出す（秘書が書く。Worker は読み取り専用のまま）
+  deliverables_dir: docs
 
 # 部長を短命 Worker（kind=head_brief, 読み取り専用）として呼ぶ任意機能。既定オフ。
-# オンにする前に config/permissions.yaml へ部長ロールのプロファイル（code.read 等）が必要。
+# 部長ロールの読み取り専用プロファイル（code.read / validation.read / project.report）は
+# config/permissions.yaml に同梱済み（社長承認 2026-11-18）。オンにすると Goal が部長のプロンプトにも送られる。
 # プロファイルが無い部長は起票せず、その部はテンプレートの Work Order にフォールバックする。
 executive_meeting:
   head_llm:

@@ -17,7 +17,7 @@ from ai_company.services.autonomous import run_autonomous
 from ai_company.services.prompt_builder import build_task_prompt
 from ai_company.services.secretary import human_next_actions, start_goal
 from ai_company.services.workers import mock_department_work_summary
-from tests.conftest import write_settings_override
+from tests.conftest import drop_head_permissions, write_settings_override
 from tests.test_budget_wait import _caps, _spend, _utcnow
 
 SAAS_GOAL = "顧客向けの勤怠管理Webサービスを作って販売したい"
@@ -75,6 +75,7 @@ def test_cli_start_lists_work_orders(tmp_env: Path) -> None:
 def test_cli_start_shows_all_heads_skipped(tmp_env: Path) -> None:
     from ai_company.cli import app
 
+    drop_head_permissions(tmp_env)
     write_settings_override(tmp_env, executive_meeting={"head_llm": {"enabled": True}})
     out = CliRunner().invoke(app, ["start", SAAS_GOAL])
     assert out.exit_code == 0, out.output
@@ -85,6 +86,7 @@ def test_cli_start_shows_all_heads_skipped(tmp_env: Path) -> None:
 
 
 def test_start_result_records_skipped_heads(db_session: Session, tmp_env: Path) -> None:
+    drop_head_permissions(tmp_env)
     write_settings_override(tmp_env, executive_meeting={"head_llm": {"enabled": True}})
     result = start_goal(db_session, SAAS_GOAL)
     assert result.head_brief_tasks == []
@@ -94,6 +96,7 @@ def test_start_result_records_skipped_heads(db_session: Session, tmp_env: Path) 
 def test_cli_start_partial_skip_has_no_all_skipped_hint(tmp_env: Path) -> None:
     from ai_company.cli import app
 
+    drop_head_permissions(tmp_env)
     path = tmp_env / "config" / "permissions.yaml"
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     data["profiles"]["sales_director"] = {"permissions": ["code.read"]}

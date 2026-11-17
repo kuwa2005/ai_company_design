@@ -13,7 +13,7 @@ from ai_company.paths import config_dir
 
 
 class HourlyBudget(BaseModel):
-    max_runs: int = 40
+    max_runs: int = 60
     max_cost_usd: float = 0.0
 
 
@@ -98,6 +98,10 @@ class MeetingResolutionsConfig(BaseModel):
     inject_decisions: bool = True
     # 回答を受けて「完了済みの部門作業の改訂」を起票する上限（案件あたり）。0 = 起票しない
     max_decision_revisions_per_project: int = Field(default=3, ge=0)
+    # 部門作業の成果物を <project>/<deliverables_dir>/<部 id>/<task id>.md に書き出す。
+    # 書き込むのは秘書側（決定論的なコード）で、部門作業の Worker は読み取り専用のまま。
+    write_deliverables: bool = True
+    deliverables_dir: str = "docs"
 
 
 class HeadLLMConfig(BaseModel):

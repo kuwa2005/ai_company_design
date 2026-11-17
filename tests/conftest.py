@@ -93,3 +93,25 @@ def write_validation_override(tmp_env: Path, **updates: object) -> None:
             data[k] = v
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
     clear_config_cache()
+
+
+HEAD_ROLES = (
+    "qa_director",
+    "sales_director",
+    "marketing_director",
+    "legal_director",
+    "operations_director",
+)
+
+
+def drop_head_permissions(tmp_env: Path) -> None:
+    """Remove the department-head profiles from the test copy of permissions.yaml.
+
+    Used by tests of the fallback path (heads skipped for lack of a profile).
+    """
+    path = tmp_env / "config" / "permissions.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    for role in HEAD_ROLES:
+        data["profiles"].pop(role, None)
+    path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    clear_config_cache()

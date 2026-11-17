@@ -208,7 +208,9 @@ Failure Report: {_quote(task.objective)}
 Department Work Order Context (重役会議の決議)
 Department / Section: {unit_label(task.department_id, task.section_id)}
 Deliverable: a document only. Do NOT edit repository files.
-Put the document's key points in "summary" and undecided items in "issues".
+Put the full document (Markdown) in "document", its key points in "summary",
+and undecided items in "issues". The secretary saves "document" to
+docs/<department>/<task id>.md; you must not write any file yourself.
 "proposed_tasks" is ignored for this kind (no chained task creation).
 Coding-style JSON with changed_files=[] is expected.
 """

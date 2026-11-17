@@ -131,9 +131,16 @@ def parse_structured_result(stdout: str) -> ParsedResult:
         # Keep the worker's own summary (department_work stores it as the deliverable trace).
         "summary": str(data.get("summary") or ""),
     }
+    # department_work: the full Markdown deliverable (written to docs/<部>/ by the secretary).
+    document = data.get("document")
+    if isinstance(document, str) and document.strip():
+        normalized["document"] = document[:_MAX_DOCUMENT_CHARS]
     if status != "completed":
         return ParsedResult(ok=False, result=normalized, error="status_not_completed")
     return ParsedResult(ok=True, result=normalized, error=None)
+
+
+_MAX_DOCUMENT_CHARS = 50_000
 
 
 def normalize_issues(value: Any, *, max_items: int = 50) -> list[str]:

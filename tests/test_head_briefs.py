@@ -25,7 +25,11 @@ from ai_company.services.prompt_builder import build_task_prompt
 from ai_company.services.result_parser import parse_head_brief_result
 from ai_company.services.secretary import start_goal
 from ai_company.services.workers import dispatch_worker, hire_worker
-from tests.conftest import write_settings_override, write_validation_override
+from tests.conftest import (
+    drop_head_permissions,
+    write_settings_override,
+    write_validation_override,
+)
 
 SAAS_GOAL = "顧客向けの勤怠管理Webサービスを作って販売したい"
 HEADS = ("sales_director", "marketing_director", "legal_director", "operations_director")
@@ -113,7 +117,8 @@ def test_default_off_changes_nothing(db_session: Session, tmp_env: Path) -> None
 def test_enabled_without_permission_profile_falls_back_at_filing(
     db_session: Session, tmp_env: Path
 ) -> None:
-    # Repo permissions.yaml has no head profiles → the scheduler would deny.
+    # No head profiles (removed from the test copy) → the scheduler would deny.
+    drop_head_permissions(tmp_env)
     _enable_heads(tmp_env)
     result = start_goal(db_session, SAAS_GOAL)
     assert result.head_brief_tasks == []

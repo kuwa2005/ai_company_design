@@ -23,7 +23,10 @@ Boundaries (same as the rest of the meeting):
 from __future__ import annotations
 
 import json
+import os
+import re
 from dataclasses import dataclass, field, replace
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
@@ -31,7 +34,8 @@ from sqlalchemy import select
 from ai_company.config import AppConfig, load_config
 from ai_company.enums import TaskKind
 from ai_company.org import DEPARTMENTS, department_by_id, org_unit_ids_for_task, section_by_id
-from ai_company.services.redact import redact_text
+from ai_company.paths import project_root
+from ai_company.services.redact import multi_line, redact_text, single_line
 from ai_company.services.result_parser import normalize_issues
 
 if TYPE_CHECKING:
@@ -92,7 +96,8 @@ _DESIGN_TITLES = ("アーキテクチャ／境界整理", "データモデル設
 
 DOC_RULE = (
     "成果物は文書のみ。コードやリポジトリは変更しない。"
-    "結果 JSON の summary に要点、issues に未確定事項を書く。"
+    "結果 JSON の document に本文（Markdown）、summary に要点、issues に未確定事項を書く。"
+    "ファイルは秘書が docs/<部>/ に保存するので、自分では書き込まない。"
 )
 
 # v1 deterministic templates. Order inside a department = issue order.
@@ -413,3 +418,97 @@ def record_department_work_result(task: Task, payload: dict[str, Any]) -> None:
     if payload.get("proposed_tasks"):
         data["work_order_ignored_proposals"] = len(payload.get("proposed_tasks") or [])
     task.constraints = json.dumps(data, ensure_ascii=False)
+
+
+# --- 部門成果物のファイル出力（docs/<部>/<task id>.md） -----------------------------
+
+_SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MAX_DELIVERABLE_CHARS = 50_000
+
+
+def deliverable_path(task: Task, config: AppConfig | None = None) -> Path | None:
+    """Where a department_work deliverable is written, or None when not allowed.
+
+    Only known department ids and plain task ids are used as path parts, and
+    the result must stay inside ``<project_root>/<deliverables_dir>``.
+    """
+    cfg = config or load_config()
+    res = cfg.settings.meeting_resolutions
+    dept = str(task.department_id or "")
+    if dept not in {d.id for d in DEPARTMENTS} or not _SAFE_ID.match(str(task.id)):
+        return None
+    sub = PurePosixPath(str(res.deliverables_dir or "docs").replace("\\", "/"))
+    if sub.is_absolute() or ".." in sub.parts or not sub.parts:
+        return None
+    root = project_root()
+    base = root.joinpath(*sub.parts)
+    target = base / dept / f"{task.id}.md"
+    # Symlinks anywhere on the way could redirect the write outside the project.
+    for p in (base, base / dept, target):
+        if p.is_symlink():
+            return None
+    try:
+        target.resolve().relative_to(root.resolve())
+    except ValueError:
+        return None
+    return target
+
+
+def render_deliverable_markdown(task: Task, payload: dict[str, Any]) -> str:
+    """Markdown body for the deliverable file (redacted; control chars removed)."""
+    from ai_company.org import unit_label
+
+    body = payload.get("document") or payload.get("summary") or ""
+    body = multi_line(redact_text(str(body)))[:_MAX_DELIVERABLE_CHARS].strip()
+    issues = normalize_issues(payload.get("issues"), max_items=20)
+    lines = [
+        f"# {single_line(redact_text(task.title))}",
+        "",
+        f"- 部／課: {unit_label(task.department_id, task.section_id)}",
+        f"- タスク: {task.id}（案件 {task.project_id}）",
+        "- 作成: 部門作業指示（重役会議の決議）。AI が作成した草案です。"
+        "社外に出す前に人が確認してください。",
+        "",
+        "---",
+        "",
+        body or "（成果物の本文がありません）",
+    ]
+    if issues:
+        lines += ["", "## 未決事項", ""]
+        lines += [f"- {single_line(redact_text(i))[:300]}" for i in issues]
+    return "\n".join(lines) + "\n"
+
+
+def write_department_deliverable(
+    task: Task, payload: dict[str, Any], config: AppConfig | None = None
+) -> Path | None:
+    """Write the deliverable file. The secretary writes it; the worker stays read-only.
+
+    Returns the written path, or None when disabled / refused / failed. Never raises.
+    """
+    cfg = config or load_config()
+    if not cfg.settings.meeting_resolutions.write_deliverables:
+        return None
+    target = deliverable_path(task, cfg)
+    data = _constraints_of(task)
+    if target is None:
+        data["work_order_document_error"] = "path_refused"
+        task.constraints = json.dumps(data, ensure_ascii=False)
+        return None
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(f".{target.name}.tmp")
+        tmp.write_text(render_deliverable_markdown(task, payload), encoding="utf-8")
+        os.replace(tmp, target)
+    except OSError as exc:
+        data["work_order_document_error"] = single_line(type(exc).__name__)
+        task.constraints = json.dumps(data, ensure_ascii=False)
+        return None
+    try:
+        rel = target.relative_to(project_root()).as_posix()
+    except ValueError:
+        rel = str(target)
+    data["work_order_document_path"] = rel
+    data.pop("work_order_document_error", None)
+    task.constraints = json.dumps(data, ensure_ascii=False)
+    return target

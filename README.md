@@ -107,24 +107,28 @@ ai-company decide 1 "価格は月額500円/人で進める" # 確認事項 #1 �
 
 `config/settings.yaml` の `executive_meeting.head_llm.enabled: true` にすると、招集された部（営業・マーケティング・法務・運用保守）の部長を、短命の読み取り専用 Worker（`kind=head_brief`）として Queue → Scheduler → Cost Governor 経由で呼びます。部長は自部門の Work Order を提案します。秘書が検証（自部門の課・担当ロールだけ、上限内）してから起票します。所見が使えない場合（解析不能・全件却下・リトライ上限）は、会議のテンプレートで起票します。所見は `.ai_company/meetings/<project_id>_kickoff_heads.md` に追記されます。
 
-- **前提**：`config/permissions.yaml` に部長ロール（`sales_director` など）の権限プロファイルが必要です。既定の設定には入っていないため、`enabled: true` にしただけでは全部長がスキップされ、テンプレートで起票されます（監査の `head_brief_skipped` に `unknown_or_empty_role_profile` と残るだけで、`start` の画面には出ません）。プロファイルを既定で同梱するかは未決です。
+- **権限**：部長ロール（`qa_director` / `sales_director` / `marketing_director` / `legal_director` / `operations_director`）の読み取り専用プロファイル（`code.read` / `validation.read` / `project.report`）は、既定の `config/permissions.yaml` に同梱しています。`enabled: true` にすると部長 Worker が実際に呼ばれ、**Goal が部長のプロンプトにも送られます**（伏せ字化はパターン依存。上の注意を参照）。プロファイルを消した部長はスキップされ、テンプレートで起票されます。
 
-### 社長の判断待ち（3件）
+### 社長の判断（2026-11-18 承認・反映済み）
 
-既定の設定は安全側（変更しない）のままです。次の3件は社長の判断を待っています。
+| # | 判断事項 | 反映内容 |
+|---|---|---|
+| ① | 部長ロールの権限プロファイル | `config/permissions.yaml` に部長5種（`qa_director` / `sales_director` / `marketing_director` / `legal_director` / `operations_director`）の読み取り専用プロファイル（`code.read` / `validation.read` / `project.report`）と、検証課の `test_reviewer`（`code.read` / `test.execute` / `validation.report`）を追加。`head_llm` は既定オフのまま |
+| ② | hourly `max_runs` | `config/budget.yaml` の `budget.hourly.max_runs` を **40 → 60**。SaaS 規模の依頼（約43〜46回起動）が1時間の枠で完了する |
+| ③ | 部門の成果物のファイル化 | 部門作業（`department_work`）の成果物を **`<案件dir>/docs/<部 id>/<タスクid>.md`** に書き出す。書くのは秘書側のコードで、部門作業の Worker は読み取り専用のまま（Cursor `--mode ask`）。設定は `meeting_resolutions.write_deliverables`（既定 true）と `deliverables_dir`（既定 `docs`） |
 
-| # | 判断事項 | 判断しない場合（いまの動作） | 変更する場合に必要なこと |
-|---|---|---|---|
-| ① | 部長ロール（sales/marketing/legal/operations_director）の**読み取り専用の権限プロファイル**（code.read / validation.read / project.report）を `config/permissions.yaml` に追加するか | `head_llm.enabled: true` にしても全部長がスキップされ、会議のテンプレートで部門作業を起票する。E2E/受け入れを検証課（test_reviewer）に移す件も、これが前提のため保留 | 権限の追加になるので承認が必要。追加すると Goal が部長のプロンプトにも送られる（伏せ字化は上の注意のとおりパターン依存） |
-| ② | `config/budget.yaml` の hourly **`max_runs` を 40 → 60** に上げるか | SaaS 規模の依頼（1件で約43〜46回起動）は1時間の枠で終わらず、「予算待ち」で止まる。約60分後に `scheduler continue` で再開する運用 | 暴走防止の上限を緩める判断。60 なら模擬設定で1回で完了することを確認済み |
-| ③ | 部門の成果物（提案書など）を **`docs/<部>/` にファイルとして書き込む**か | 成果物は結果の要約として DB（タスクの constraints）に残るだけ | 書き込み権限の追加になる。allowed_paths の制限と、読み取り専用の種別との整合を設計してから入れる |
+成果物ファイルについて：
+
+- 本文は Worker の結果 JSON の `document`（Markdown、最大 5 万字）です。無ければ `summary` を使います。末尾に「未決事項」（`issues`）を付けます。
+- 書き出す前に伏せ字化（`redact_text`）し、制御文字を除きます。パターンに当たらない秘密はそのまま残るので、社外に出す前に人が確認してください（ファイルの先頭にも注記があります）。
+- パスは既知の部 id とタスク id だけで組み立て、案件ディレクトリの外（`..`、絶対パス、シンボリックリンク）には書きません。拒否したときは `constraints` に `work_order_document_error` を残し、タスク自体は完了にします。
+- 書き出したパスは `constraints` の `work_order_document_path` と、監査イベント `task_completed` の `document_path` に残ります。
 
 ### 未決事項（組織モデル）
 
-1. **既定の `max_runs: 40` を SaaS 規模の依頼が超える**（社長の判断待ち②）：Work Order が加わり、Worker の起動が 1 案件で約 43 回（部長所見をオンにすると約 46 回）になりました。既定の `config/budget.yaml`（hourly `max_runs: 40`）に達すると、自動実行は空回りせず **「予算待ち（時間枠の上限）」で停止**します（`stopped_reason=budget_wait`）。画面には再開できる見込み時刻と `ai-company scheduler continue` の案内が出ます。暴走防止が働いているだけで、バグではありません。未決なのは、上限を引き上げるか、`max_orders_per_meeting` を下げるか、「時刻を待って再開」を正式な運用とするかです。
-2. **部門成果物をファイルとして残す権限**（社長の判断待ち③）：`department_work` は読み取り専用（Cursor `--mode ask`）で動きます。成果物は結果 JSON の要約（summary は最大 2000 字、issues は最大 10 件）として、タスクの `constraints` に残るだけです。提案資料などを `docs/` などにファイルとして出力するには、書き込みを許す範囲（allowed_paths、使い捨てワークツリーなど）を決める必要があります。
-3. **部長の LLM 化**：部長が自部門の Work Order を判断する経路は、任意機能 `executive_meeting.head_llm` として**実装済み（既定オフ）**です（上の「部長所見」）。未決として残るのは次の3点です。
-   - 部長ロールの権限プロファイルを既定の `permissions.yaml` に同梱するか、利用者が追加するか（社長の判断待ち①）
+1. **実行回数の上限**：hourly `max_runs` は 60 にしました（判断②）。これを超える規模の依頼では、自動実行は空回りせず **「予算待ち（時間枠の上限）」で停止**し（`stopped_reason=budget_wait`）、再開できる見込み時刻と `ai-company scheduler continue` を案内します。
+2. **E2E/受け入れの担当**：`test_reviewer` のプロファイルは追加しましたが（判断①）、E2E/受け入れタスクは今も `coding_worker` が担当しています。検証課（`test_reviewer`）へ移すかどうかと、設計課専任の `design_engineer` ロールを作るかどうかは未着手です。
+3. **部長の LLM 化**：部長が自部門の Work Order を判断する経路は、任意機能 `executive_meeting.head_llm` として**実装済み（既定オフ）**です（上の「部長所見」）。権限プロファイルは同梱済みです（判断①）。未決として残るのは次の2点です。
    - 実際の Cursor ランナーでの所見の品質の確認（未実施）
    - 出席者の選び方（キーワード一致）と、会議テンプレートの部長発言が決め打ちのままであること
 

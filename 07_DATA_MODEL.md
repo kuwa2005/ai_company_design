@@ -253,13 +253,15 @@ priority             min(テンプレート値, meeting_resolutions.priority_cei
 constraints (JSON)   {"work_order_key": "legal.precheck", "meeting": "<会議タグ>"}
                      完了後に追記: work_order_summary（伏せ字化して2000字まで）,
                                  work_order_issues（伏せ字化して10件・各300字まで）,
-                                 work_order_ignored_proposals（無視した proposed_tasks の件数）
+                                 work_order_ignored_proposals（無視した proposed_tasks の件数）,
+                                 work_order_document_path（書き出した成果物 docs/<部>/<id>.md）
+                                 または work_order_document_error（path_refused / OSError 名）
                      社長回答による改訂（§13.4）: {"work_order_key": "<元のkey>.rev:<回答key>",
                                  "decision_key": "q:…", "revises": "<元の task id>"}
 ```
 
 - `work_order_summary` / `work_order_issues` は、ワーカーの出力を `redact_text` で**伏せ字化してから保存**します（`record_department_work_result`）。読み出し側（自問監査のプロンプト）でも、もう一度伏せ字化します。
-- 部長所見（§13.3）から起票した Work Order と、社長回答による改訂の objective の末尾には、文書だけを作るための規則（`DOC_RULE`：「成果物は文書のみ。コードやリポジトリは変更しない。結果 JSON の summary に要点、issues に未確定事項を書く。」）が付きます。
+- 部長所見（§13.3）から起票した Work Order と、社長回答による改訂の objective の末尾には、文書だけを作るための規則（`DOC_RULE`：「成果物は文書のみ。コードやリポジトリは変更しない。結果 JSON の document に本文（Markdown）、summary に要点、issues に未確定事項を書く。ファイルは秘書が docs/<部>/ に保存するので、自分では書き込まない。」）が付きます。
 
 - 冪等性：同じ案件で `work_order_key` が既にあれば、再び起票しません。
 - 読み取り専用の種別として、Cursor は `--mode ask` で動きます。検証ゲート（Validation Plan / Judge）には入りません。完了すると DONE になり、自問ループで点検されます。
@@ -365,6 +367,6 @@ acceptance_criteria  objective と同じ
 
 ### 13.6 未決事項（データモデル関連）
 
-- 部門成果物は `constraints` の JSON に要約として残るだけで、Artifact（ファイル）にはなりません。ファイルとして残すには、書き込みを許す範囲を決める必要があります。
+- 部門成果物は `<案件dir>/docs/<部>/<タスクid>.md` に書き出しますが、Artifact テーブルには登録しません（パスは `constraints` と監査イベントに残ります）。
 - `created_at` は SQLite では秒単位です。同じ秒の中では順序を判定できません。厳密な順序が必要な箇所には連番列が要ります（STEP7 のテスト修正で判明）。
 - 部/課のマスタはコード（`org.py`）にあり、DB にはありません。組織を変更しても、既存行の id は自動では移行されません。

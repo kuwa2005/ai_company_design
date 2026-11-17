@@ -28,6 +28,33 @@ profiles:
       - task.prioritize
       - staffing.request
       - validation.read
+  # 部長（重役会議の出席者）。部長所見（head_brief）は読み取り専用の短命 Worker。
+  # 書き込み・シェル・タスク起票の権限は持たせない（起票は秘書が検証してから行う）。
+  qa_director:
+    permissions:
+      - code.read
+      - validation.read
+      - project.report
+  sales_director:
+    permissions:
+      - code.read
+      - validation.read
+      - project.report
+  marketing_director:
+    permissions:
+      - code.read
+      - validation.read
+      - project.report
+  legal_director:
+    permissions:
+      - code.read
+      - validation.read
+      - project.report
+  operations_director:
+    permissions:
+      - code.read
+      - validation.read
+      - project.report
   reviewer:
     permissions:
       - code.read
@@ -36,6 +63,13 @@ profiles:
 
 
   validation_reviewer:
+    permissions:
+      - code.read
+      - test.execute
+      - validation.report
+
+  # 検証課（開発部）のテスト検証。以前は *_reviewer の別名で validation_reviewer を使っていた。
+  test_reviewer:
     permissions:
       - code.read
       - test.execute

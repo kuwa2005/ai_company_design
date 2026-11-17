@@ -247,12 +247,20 @@ def _finalize_execution(
             # proposed_tasks は無視する（連鎖で起票が増える経路を作らない）。
             from ai_company.services.department_orders import (
                 record_department_work_result,
+                write_department_deliverable,
             )
             from ai_company.services.tasks import refresh_dependents
 
             record_department_work_result(task, execution.result_json or {})
+            # 成果物ファイルは秘書側が書く（Worker は読み取り専用のまま）
+            doc_path = write_department_deliverable(task, execution.result_json or {}, cfg)
             task.status = TaskStatus.DONE
             session.flush()
+            meta: dict[str, Any] = {"execution_id": execution.id, "kind": "department_work"}
+            if doc_path is not None:
+                meta["document_path"] = json.loads(task.constraints or "{}").get(
+                    "work_order_document_path"
+                )
             record_audit(
                 session,
                 event_type="task_completed",
@@ -260,7 +268,7 @@ def _finalize_execution(
                 actor_id=worker.id,
                 target_type="task",
                 target_id=task.id,
-                metadata={"execution_id": execution.id, "kind": "department_work"},
+                metadata=meta,
             )
             refresh_dependents(session, task.id)
             return execution

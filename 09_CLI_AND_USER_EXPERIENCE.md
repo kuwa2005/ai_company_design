@@ -57,11 +57,11 @@ ai-company meeting "Goal" [--all-departments]
 - 再開の案内は `ai-company scheduler continue --runner <直近のランナー> --project <案件ID>` の形で表示する（`status` も同じ）。改訂が終わると新しいリリース候補を作る。
 - 番号は振り直さない。解決済みの番号をもう一度指定すると終了コード 2。取り消し（un-decide）は無い。
 
-### 社長の判断待ち（設定・3件）
+### 社長の判断（設定・3件、2026-11-18 反映済み）
 
-1. 部長ロールの読み取り専用プロファイルを `config/permissions.yaml` に追加するか（未追加なら `head_llm` を有効にしても部長はスキップされ、テンプレートで起票）。
-2. `config/budget.yaml` の hourly `max_runs` を 40 → 60 にするか（40 のままでは SaaS 規模の依頼が「予算待ち」で止まり、約60分後に再開）。
-3. 部門の成果物を `docs/<部>/` にファイルとして書き込むか（未決定の間は DB の要約のみ）。
+1. 部長5種と `test_reviewer` の読み取り専用プロファイルを `config/permissions.yaml` に追加（`head_llm` は既定オフのまま）。
+2. `config/budget.yaml` の hourly `max_runs` を 40 → 60。
+3. 部門の成果物を `<案件dir>/docs/<部>/<タスクid>.md` に書き出す（秘書が書く。Worker は読み取り専用のまま）。
 
 詳細は [使用説明書.md](./使用説明書.md) §8.1。
 
