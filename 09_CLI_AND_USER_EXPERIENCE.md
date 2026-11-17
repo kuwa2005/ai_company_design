@@ -59,9 +59,10 @@ ai-company meeting "Goal" [--all-departments]
 
 ### 社長の判断（設定・3件、2026-11-18 反映済み）
 
-1. 部長5種と `test_reviewer` の読み取り専用プロファイルを `config/permissions.yaml` に追加（`head_llm` は既定オフのまま）。
+1. 部長5種と `test_reviewer` の読み取り専用プロファイルを `config/permissions.yaml` に追加。部長所見（`head_llm`）は既定オン。
 2. `config/budget.yaml` の hourly `max_runs` を 40 → 60。
 3. 部門の成果物を `<案件dir>/docs/<部>/<タスクid>.md` に書き出す（秘書が書く。Worker は読み取り専用のまま）。
+4. 設計課に `design_engineer`、検証課に `acceptance_engineer`（E2E・受け入れ）を新設。
 
 詳細は [使用説明書.md](./使用説明書.md) §8.1。
 

@@ -59,7 +59,15 @@ _PHASE_ORDER = (
 
 # 自問監査（LLM）の提案は、書き込み権限のある実装タスクになる。
 # 担当は開発部の実装ロールに限る（秘書・部長・社長・検証役などを名乗らせない）。
-GAP_FIX_ROLES = frozenset({"coding_worker", "backend_engineer", "frontend_engineer"})
+GAP_FIX_ROLES = frozenset(
+    {
+        "coding_worker",
+        "backend_engineer",
+        "frontend_engineer",
+        "design_engineer",
+        "acceptance_engineer",
+    }
+)
 # 1回の監査結果から起票する上限（連鎖で起票が膨らむのを防ぐ）
 MAX_PROPOSED_PER_RESULT = 5
 # 監査（LLM）からの起票は high まで。critical は全レビューが付きコストが膨らむため、

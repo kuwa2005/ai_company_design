@@ -204,7 +204,7 @@ def _generic_decompose_skeleton(goal: str, goal_risk: str) -> list[TaskProposal]
         TaskProposal(
             title="Goal分解とスコープ定義",
             objective=f"「{g}」を実装可能なスコープ・非目標・成功指標に分解する",
-            role_required="coding_worker",
+            role_required="design_engineer",
             priority=90,
             risk_level="low",
             acceptance_criteria="スコープと非目標が文書化されている",
@@ -212,7 +212,7 @@ def _generic_decompose_skeleton(goal: str, goal_risk: str) -> list[TaskProposal]
         TaskProposal(
             title="アーキテクチャ／境界整理",
             objective="コンポーネント境界・データ／API境界・主要リスクを定義する",
-            role_required="coding_worker",
+            role_required="design_engineer",
             priority=85,
             depends_on_titles=["Goal分解とスコープ定義"],
             risk_level="medium",
@@ -230,7 +230,7 @@ def _generic_decompose_skeleton(goal: str, goal_risk: str) -> list[TaskProposal]
         TaskProposal(
             title="E2E / 受け入れ確認",
             objective="主要フローのテストと受け入れ条件確認（デモシナリオ含む）",
-            role_required="coding_worker",
+            role_required="acceptance_engineer",
             priority=60,
             depends_on_titles=["コア実装"],
             risk_level="medium",
@@ -239,7 +239,7 @@ def _generic_decompose_skeleton(goal: str, goal_risk: str) -> list[TaskProposal]
         TaskProposal(
             title="管理者デモシナリオ",
             objective="管理者がログインし主要操作を完走できるデモを機械的受け入れにする",
-            role_required="coding_worker",
+            role_required="acceptance_engineer",
             priority=55,
             depends_on_titles=["E2E / 受け入れ確認"],
             risk_level="medium",
@@ -318,15 +318,19 @@ def _keyword_plan(goal: str) -> GoalPlan:
     )
     if is_webish:
         staffing = [
+            StaffingProposal("design_engineer", 1, "Scope and architecture design"),
             StaffingProposal("backend_engineer", 2, "API and schema implementation"),
             StaffingProposal("frontend_engineer", 1, "Web UI implementation"),
+            StaffingProposal("acceptance_engineer", 1, "E2E / acceptance tests"),
             StaffingProposal("test_reviewer", 1, "Independent test validation"),
             StaffingProposal("security_reviewer", 1, "Auth/security validation"),
             StaffingProposal("judge", 1, "Validation gate judge"),
         ]
     else:
         staffing = [
+            StaffingProposal("design_engineer", 1, "Scope and architecture design"),
             StaffingProposal("coding_worker", 2, "Core implementation"),
+            StaffingProposal("acceptance_engineer", 1, "E2E / acceptance tests"),
             StaffingProposal("test_reviewer", 1, "Independent test review"),
             StaffingProposal("judge", 1, "Validation judge"),
         ]

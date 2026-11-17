@@ -27,6 +27,8 @@ def load_role_prompt(role: str) -> str:
         "coding_worker": "coding_worker.md",
         "backend_engineer": "coding_worker.md",
         "frontend_engineer": "coding_worker.md",
+        "design_engineer": "design_engineer.md",
+        "acceptance_engineer": "acceptance_engineer.md",
         "reviewer": "reviewer.md",
         "test_reviewer": "test_reviewer.md",
         "spec_reviewer": "spec_reviewer.md",

@@ -282,7 +282,7 @@ meeting_resolutions:
 
 上限を超えた指示や、計画に同じ部/課のタスクがある指示は起票しません。その理由は議事録と監査ログに残します。
 
-### 13.3 部長所見 ＝ `kind = head_brief`（任意機能・既定オフ）
+### 13.3 部長所見 ＝ `kind = head_brief`（既定オン）
 
 `config/settings.yaml` の `executive_meeting.head_llm.enabled: true` のときだけ起票します。専用のテーブルは作らず、`tasks` の1行として表します。
 

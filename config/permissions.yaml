@@ -13,6 +13,21 @@ profiles:
       - code.commit
       - test.execute
       - shell.safe
+  # 開発部／設計課: スコープ分解・アーキテクチャの設計文書（リポジトリ内の文書を書く）
+  design_engineer:
+    permissions:
+      - code.read
+      - code.edit
+      - code.commit
+  # 開発部／検証課: E2E・受け入れ・デモシナリオのテストコードを書いて実行する
+  # （中核の実装者とは別の担当。実装の合否は従来どおり独立検証と判定が決める）
+  acceptance_engineer:
+    permissions:
+      - code.read
+      - code.edit
+      - code.commit
+      - test.execute
+      - shell.safe
 
   engineering_manager:
     permissions:

@@ -157,11 +157,11 @@ validation_request:
 - `kind=department_work` は読み取り専用です。コードは変更せず、結果 JSON の要約を成果物として残します。検証ゲートには入らず、自問ループで点検します。
 - 秘書がこの作業を自分で行うことはなく、Worker を直接起動することもありません。
 
-### 8.3.1 部長所見（head_brief。任意機能・既定オフ）
+### 8.3.1 部長所見（head_brief。既定オン）
 
 実装: `src/ai_company/services/head_briefs.py`、設定 `executive_meeting.head_llm`
 
-- オンにすると、対象の部（既定：営業・マーケティング・法務・運用保守）ごとに、部長を読み取り専用の短命 Worker（`kind=head_brief`）として起票します。その部のテンプレート指示は保留します。
+- オン（既定）のとき、対象の部（既定：営業・マーケティング・法務・運用保守）ごとに、部長を読み取り専用の短命 Worker（`kind=head_brief`）として起票します。その部のテンプレート指示は保留します。
 - 部長の出力（発言・担当・懸念・確認事項・他部への依頼・Work Order）は、秘書が検証してから起票します。上限は `meeting_resolutions` と共通です。不正な出力、上限超過、解析不能、リトライ上限のときは、保留していたテンプレートで起票します（`fallback: template`）。
 - 所見は `<project_id>_kickoff_heads.md` に追記します（伏せ字化とエスケープをしたうえで、行頭に接頭辞を付けます）。確認事項は status の「会議の確認事項」に加わります。
 - **待機フォールバック**：実装が完了したあとも所見が実行されない（READY / WAITING / BACKLOG のまま）場合は、Scheduler のサイクルごとに数えます。`max_wait_cycles`（既定 3 回の配車の機会）を超えたら、テンプレートに戻して所見を CANCELLED にします。BLOCKED / FAILED / 予算待ちの所見は、すぐにテンプレートに戻します。これで、部長が動けなくても自問ループとリリースは止まりません。
@@ -205,6 +205,6 @@ validation_request:
 
 1. **実行回数の上限（解決済み）**：hourly `max_runs` を 60 にしました（2026-11-18 社長承認）。mock の E2E（約 43〜46 回）は1時間の枠で完了します。超えた場合は **「予算待ち」（`stopped_reason=budget_wait`）で停止**し、再開できる見込み時刻を案内します。
 2. **部門成果物のファイル化（解決済み）**：部門作業の Worker は読み取り専用のまま、秘書側のコード（`write_department_deliverable`）が結果 JSON の `document`（無ければ `summary`）を `<案件dir>/docs/<部>/<タスクid>.md` に書き出します。パスは既知の部 id とタスク id だけで作り、案件ディレクトリの外やシンボリックリンク経由では書きません。
-3. **部長の LLM 化**：部長が自部門の Work Order を判断する経路は、任意機能 `executive_meeting.head_llm`（既定オフ）として実装済みです。部長は読み取り専用の短命 Worker（`kind=head_brief`）で、出力は秘書が検証してから起票します。上限は `meeting_resolutions` と共通です。未決として残るのは次の3点です。
+3. **部長の LLM 化**：部長が自部門の Work Order を判断する経路は、`executive_meeting.head_llm`（既定オン）として実装済みです。部長は読み取り専用の短命 Worker（`kind=head_brief`）で、出力は秘書が検証してから起票します。上限は `meeting_resolutions` と共通です。未決として残るのは次の3点です。
    - **招集の判断**（キーワード一致）と、会議テンプレートの部長発言が決め打ちのままであること
    - 実際の Cursor での所見の品質確認

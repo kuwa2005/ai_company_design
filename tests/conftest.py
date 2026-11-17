@@ -36,6 +36,15 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     monkeypatch.setenv("AI_COMPANY_DB_PATH", str(data / "test.db"))
     monkeypatch.setenv("AI_COMPANY_PROJECT_DIR", str(tmp_path))
 
+    # The shipped default turns head briefs on. Most tests exercise the
+    # deterministic template flow, so the test baseline pins it off; tests of
+    # head briefs enable it explicitly (see test_head_briefs.py and
+    # test_heads_default_on.py for the shipped default).
+    settings_path = cfg / "settings.yaml"
+    settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
+    settings["executive_meeting"]["head_llm"]["enabled"] = False
+    settings_path.write_text(yaml.safe_dump(settings, allow_unicode=True), encoding="utf-8")
+
     clear_config_cache()
     reset_engine()
     init_db()

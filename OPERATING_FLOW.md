@@ -9,7 +9,7 @@
   → 秘書: 計画 → 重役会議（部長を招集）→ 議事録 .ai_company/meetings/<id>_kickoff.md
   → 各タスクに 部/課 を記録して起票
   → 招集した部に部門作業指示（Work Order, kind=department_work, 文書のみ）を起票
-  → （head_llm オン時）部長所見（head_brief）→ 秘書が検証して Work Order を起票／失敗・待ちすぎはテンプレートへ
+  → （head_llm オン時＝既定）部長所見（head_brief）→ 秘書が検証して Work Order を起票／失敗・待ちすぎはテンプレートへ
   → Queue → Scheduler → Cost Governor → Worker → 独立検証 → Judge
   → 実装キュー空 → 部長所見・部門作業の完了を待つ → 自問ループ（部門別の監査）→ リリース候補
 社長: status で「会議の確認事項 #n」を見る → decide n "回答"

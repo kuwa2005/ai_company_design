@@ -40,6 +40,8 @@ KIND_JA = {
 ROLE_JA = {
     "coding_worker": "実装",
     "backend_engineer": "バックエンド",
+    "design_engineer": "設計担当",
+    "acceptance_engineer": "受け入れテスト担当",
     "frontend_engineer": "フロントエンド",
     "engineering_manager": "実装マネージャー",
     "technical_director": "技術責任者",

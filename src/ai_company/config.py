@@ -69,6 +69,8 @@ class StaffingConfig(BaseModel):
             "coding_worker": 4,
             "backend_engineer": 3,
             "frontend_engineer": 2,
+            "design_engineer": 1,
+            "acceptance_engineer": 2,
             "reviewer": 4,
             "judge": 2,
             "test_reviewer": 2,
@@ -105,14 +107,14 @@ class MeetingResolutionsConfig(BaseModel):
 
 
 class HeadLLMConfig(BaseModel):
-    """部長を短命 Worker（head_brief）として呼ぶ任意機能. 既定オフ.
+    """部長を短命 Worker（head_brief）として呼ぶ機能. 既定オン（2026-11-18 社長判断）.
 
     オフのときは会議テンプレートの Work Order だけを起票する（従来どおり）。
     オンのときは対象部の Work Order を保留し、部長所見の検証済み指示で置き換える。
     失敗・却下・リトライ上限では保留したテンプレートを起票する（fallback=template）。
     """
 
-    enabled: bool = False
+    enabled: bool = True
     departments: list[str] = Field(
         default_factory=lambda: ["sales", "marketing", "legal", "operations"]
     )

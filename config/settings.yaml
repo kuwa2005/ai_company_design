@@ -23,6 +23,8 @@ staffing:
     coding_worker: 4
     backend_engineer: 3
     frontend_engineer: 2
+    design_engineer: 1
+    acceptance_engineer: 2
     engineering_manager: 2
     technical_director: 1
     reviewer: 4
@@ -62,13 +64,14 @@ meeting_resolutions:
   write_deliverables: true                  # 部門の成果物を <案件dir>/docs/<部>/<タスクid>.md に書き出す（秘書が書く。Worker は読み取り専用のまま）
   deliverables_dir: docs
 
-# 部長を短命 Worker（kind=head_brief, 読み取り専用）として呼ぶ任意機能。既定オフ。
+# 部長を短命 Worker（kind=head_brief, 読み取り専用）として呼ぶ機能。既定オン（2026-11-18 社長判断）。
+# 止めるときは enabled: false（会議テンプレートの Work Order だけを起票する）。
 # 部長ロールの読み取り専用プロファイル（code.read / validation.read / project.report）は
 # config/permissions.yaml に同梱済み（社長承認 2026-11-18）。オンにすると Goal が部長のプロンプトにも送られる。
 # プロファイルが無い部長は起票せず、その部はテンプレートの Work Order にフォールバックする。
 executive_meeting:
   head_llm:
-    enabled: false
+    enabled: true   # 既定オン（2026-11-18 社長判断）。Goal が部長のプロンプトにも送られる
     departments: [sales, marketing, legal, operations]
     max_heads_per_meeting: 4
     estimated_cost_per_head: 0.05

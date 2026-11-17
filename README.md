@@ -103,9 +103,9 @@ ai-company decide 1 "価格は月額500円/人で進める" # 確認事項 #1 �
 - 番号は振り直されません。解決済みの番号をもう一度指定するとエラーになります。
 - **完了済みの案件の再開**：完了（DONE）した案件に回答して改訂タスクが起票されると、案件は進行中に戻ります。画面に表示される `ai-company scheduler continue --runner <直近のランナー> --project <案件ID>` で続けると、改訂が終わったあとに新しいリリース候補が作られます（古い候補は残ります）。改訂が起票されない回答（記録だけ）では、案件は完了のままです。
 
-### 部長所見（任意機能・既定オフ）
+### 部長所見（既定オン）
 
-`config/settings.yaml` の `executive_meeting.head_llm.enabled: true` にすると、招集された部（営業・マーケティング・法務・運用保守）の部長を、短命の読み取り専用 Worker（`kind=head_brief`）として Queue → Scheduler → Cost Governor 経由で呼びます。部長は自部門の Work Order を提案します。秘書が検証（自部門の課・担当ロールだけ、上限内）してから起票します。所見が使えない場合（解析不能・全件却下・リトライ上限）は、会議のテンプレートで起票します。所見は `.ai_company/meetings/<project_id>_kickoff_heads.md` に追記されます。
+`config/settings.yaml` の `executive_meeting.head_llm.enabled`（既定 `true`）がオンのとき、招集された部（営業・マーケティング・法務・運用保守）の部長を、短命の読み取り専用 Worker（`kind=head_brief`）として Queue → Scheduler → Cost Governor 経由で呼びます。部長は自部門の Work Order を提案します。秘書が検証（自部門の課・担当ロールだけ、上限内）してから起票します。所見が使えない場合（解析不能・全件却下・リトライ上限）は、会議のテンプレートで起票します。所見は `.ai_company/meetings/<project_id>_kickoff_heads.md` に追記されます。
 
 - **権限**：部長ロール（`qa_director` / `sales_director` / `marketing_director` / `legal_director` / `operations_director`）の読み取り専用プロファイル（`code.read` / `validation.read` / `project.report`）は、既定の `config/permissions.yaml` に同梱しています。`enabled: true` にすると部長 Worker が実際に呼ばれ、**Goal が部長のプロンプトにも送られます**（伏せ字化はパターン依存。上の注意を参照）。プロファイルを消した部長はスキップされ、テンプレートで起票されます。
 
@@ -113,8 +113,10 @@ ai-company decide 1 "価格は月額500円/人で進める" # 確認事項 #1 �
 
 | # | 判断事項 | 反映内容 |
 |---|---|---|
-| ① | 部長ロールの権限プロファイル | `config/permissions.yaml` に部長5種（`qa_director` / `sales_director` / `marketing_director` / `legal_director` / `operations_director`）の読み取り専用プロファイル（`code.read` / `validation.read` / `project.report`）と、検証課の `test_reviewer`（`code.read` / `test.execute` / `validation.report`）を追加。`head_llm` は既定オフのまま |
+| ① | 部長ロールの権限プロファイル | `config/permissions.yaml` に部長5種（`qa_director` / `sales_director` / `marketing_director` / `legal_director` / `operations_director`）の読み取り専用プロファイル（`code.read` / `validation.read` / `project.report`）と、検証課の `test_reviewer`（`code.read` / `test.execute` / `validation.report`）を追加 |
 | ② | hourly `max_runs` | `config/budget.yaml` の `budget.hourly.max_runs` を **40 → 60**。SaaS 規模の依頼（約43〜46回起動）が1時間の枠で完了する |
+| ④ | 部長所見を既定オン | `executive_meeting.head_llm.enabled` の既定を `true` に。止めるときは `false` |
+| ⑤ | 設計担当・受け入れテスト担当 | `design_engineer`（開発部／設計課：スコープ分解・アーキテクチャ）と `acceptance_engineer`（開発部／検証課：E2E・受け入れ・デモシナリオ）を新設。どちらも実装マネージャーの配下で、書き込み可の実装タスクを担当。`test_reviewer` は検証ゲート専任のまま（上司が判定役のため、E2E の失敗時の再計画を判定役にさせない） |
 | ③ | 部門の成果物のファイル化 | 部門作業（`department_work`）の成果物を **`<案件dir>/docs/<部 id>/<タスクid>.md`** に書き出す。書くのは秘書側のコードで、部門作業の Worker は読み取り専用のまま（Cursor `--mode ask`）。設定は `meeting_resolutions.write_deliverables`（既定 true）と `deliverables_dir`（既定 `docs`） |
 
 成果物ファイルについて：
@@ -127,8 +129,7 @@ ai-company decide 1 "価格は月額500円/人で進める" # 確認事項 #1 �
 ### 未決事項（組織モデル）
 
 1. **実行回数の上限**：hourly `max_runs` は 60 にしました（判断②）。これを超える規模の依頼では、自動実行は空回りせず **「予算待ち（時間枠の上限）」で停止**し（`stopped_reason=budget_wait`）、再開できる見込み時刻と `ai-company scheduler continue` を案内します。
-2. **E2E/受け入れの担当**：`test_reviewer` のプロファイルは追加しましたが（判断①）、E2E/受け入れタスクは今も `coding_worker` が担当しています。検証課（`test_reviewer`）へ移すかどうかと、設計課専任の `design_engineer` ロールを作るかどうかは未着手です。
-3. **部長の LLM 化**：部長が自部門の Work Order を判断する経路は、任意機能 `executive_meeting.head_llm` として**実装済み（既定オフ）**です（上の「部長所見」）。権限プロファイルは同梱済みです（判断①）。未決として残るのは次の2点です。
+2. **部長の LLM 化**：部長が自部門の Work Order を判断する経路 `executive_meeting.head_llm` は**既定オン**です（上の「部長所見」、判断④）。未決として残るのは次の2点です。
    - 実際の Cursor ランナーでの所見の品質の確認（未実施）
    - 出席者の選び方（キーワード一致）と、会議テンプレートの部長発言が決め打ちのままであること
 

@@ -81,7 +81,7 @@ DEPARTMENTS: tuple[Department, ...] = (
             Section(
                 id="design",
                 name_ja="設計課",
-                member_roles=("coding_worker",),
+                member_roles=("design_engineer", "coding_worker"),
                 chief_role="engineering_manager",
                 handles="スコープ分解・アーキテクチャ・データモデル設計",
             ),
@@ -95,7 +95,7 @@ DEPARTMENTS: tuple[Department, ...] = (
             Section(
                 id="verification",
                 name_ja="検証課",
-                member_roles=("test_reviewer", "edge_case_reviewer"),
+                member_roles=("acceptance_engineer", "test_reviewer", "edge_case_reviewer"),
                 chief_role="engineering_manager",
                 handles="E2E・受け入れ・境界条件の検証（実装者とは別人）",
             ),

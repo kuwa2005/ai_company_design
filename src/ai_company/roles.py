@@ -105,6 +105,20 @@ ROLES: dict[str, RoleDef] = {
         reports_to="engineering_manager",
         handles="実装・修正の実行",
     ),
+    "design_engineer": RoleDef(
+        id="design_engineer",
+        title_ja="設計担当",
+        layer="worker",
+        reports_to="engineering_manager",
+        handles="スコープ分解・アーキテクチャ／境界の設計文書（開発部／設計課）",
+    ),
+    "acceptance_engineer": RoleDef(
+        id="acceptance_engineer",
+        title_ja="受け入れテスト担当",
+        layer="worker",
+        reports_to="engineering_manager",
+        handles="E2E・受け入れ・デモシナリオの自動テスト作成（開発部／検証課。中核実装者とは別の担当）",
+    ),
     "backend_engineer": RoleDef(
         id="backend_engineer",
         title_ja="バックエンド",
