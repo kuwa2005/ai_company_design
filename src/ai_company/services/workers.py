@@ -13,7 +13,7 @@ from ai_company.config import AppConfig, load_config
 from ai_company.db.models import Execution, Task, Worker
 from ai_company.enums import ReviewVerdict, TaskKind, TaskStatus, WorkerStatus
 from ai_company.ids import new_id
-from ai_company.paths import executions_dir, project_root
+from ai_company.paths import data_dir, executions_dir, project_root
 from ai_company.services import cost_governor as cg
 from ai_company.services.audit import record_audit
 from ai_company.services.cursor_runner import run_cursor_cli
@@ -692,7 +692,11 @@ def run_cursor_worker(
 ) -> Execution:
     """Run task via Cursor CLI adapter. Fail closed on bad structured output."""
     cfg = config or load_config()
-    from ai_company.services.evidence import collect_evidence, snapshot_head
+    from ai_company.services.evidence import (
+        collect_evidence,
+        snapshot_head,
+        snapshot_worktree,
+    )
     from ai_company.services.policy_engine import (
         assert_dispatch_allowed,
         role_allows_writes,
@@ -723,11 +727,23 @@ def run_cursor_worker(
             wt = None
     work_cwd = str(wt.path) if wt else str(workspace)
     baseline = None
+    pre_dirty: dict[str, str] | None = None
+    # ai-company's own state (DB, execution logs, minutes) is never the worker's change.
+    ignore_prefixes: list[str] = []
+    try:
+        ignore_prefixes.append(
+            data_dir().resolve().relative_to(Path(work_cwd).resolve()).as_posix()
+        )
+    except ValueError:
+        pass
     if (Path(work_cwd) / ".git").exists():
         try:
             baseline = snapshot_head(Path(work_cwd))
+            # Uncommitted output of earlier workers: blame only what this run changes.
+            pre_dirty = snapshot_worktree(Path(work_cwd), ignore_prefixes=ignore_prefixes)
         except Exception:
             baseline = None
+            pre_dirty = None
 
     progress(
         f"Cursor起動  {task.id}  「{task.title}」  "
@@ -819,6 +835,8 @@ def run_cursor_worker(
                 allow_writes=allow_writes,
                 allowed_paths=list(task.allowed_paths or []) or None,
                 forbidden_paths=list(task.forbidden_paths or []) or None,
+                pre_dirty=pre_dirty,
+                ignore_prefixes=ignore_prefixes,
             )
         except Exception as exc:
             from ai_company.services.evidence import EvidencePack

@@ -272,12 +272,37 @@ def _keyword_in(keyword: str, lower: str) -> bool:
     return keyword in lower
 
 
+# 社外に売る・提供する依頼では、営業部だけでなく契約・利用規約・個人情報（法務部）と
+# 価値提案・価格（マーケティング部）も会議の段階で要る。キーワードが依頼文に無くても招集する。
+SELLING_CO_SUMMON: dict[str, str] = {
+    "legal": "社外販売（契約・利用規約・個人情報）",
+    "marketing": "社外販売（価値提案・価格）",
+}
+
+
+def is_selling_goal(goal: str) -> bool:
+    """True when the goal sells / provides the product outside the company.
+
+    Selling intent (営業部の強いキーワード) or an external marker, and not an
+    internal tool (社内向け). 「社内勤怠を他社に提供」は外部マーカーが勝つ。
+    """
+    if is_internal_goal(goal):
+        return False
+    if is_external_goal(goal):
+        return True
+    lower = goal.lower()
+    sales = department_by_id("sales")
+    return any(_keyword_in(k, lower) for k in sales.keywords)
+
+
 def summon_hits(dept: Department, goal: str) -> list[str]:
     """Keywords in ``goal`` that summon ``dept`` (empty = not summoned)."""
     lower = goal.lower()
     hits = [k for k in dept.keywords if _keyword_in(k, lower)]
     if not is_internal_goal(goal):
         hits += [k for k in dept.weak_keywords if _keyword_in(k, lower)]
+    if dept.id in SELLING_CO_SUMMON and is_selling_goal(goal):
+        hits.append(SELLING_CO_SUMMON[dept.id])
     return hits
 
 

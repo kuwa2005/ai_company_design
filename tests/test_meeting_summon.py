@@ -38,10 +38,12 @@ def test_internal_tools_do_not_summon_sales_or_marketing(goal: str) -> None:
     [
         ("顧客向けの勤怠管理Webサービスを作って販売したい", {"sales", "marketing"}),
         ("顧客向けSaaSを販売する", {"sales", "marketing"}),
-        ("社内ツールを作って外部にも販売したい", {"sales"}),  # 販売の意図は社内でも有効
+        # 外部への販売: 営業部に加えてマーケティング部も招集（社外販売の同時招集）
+        ("社内ツールを作って外部にも販売したい", {"sales", "marketing"}),
         ("新サービスのランディングページを作る", {"sales", "marketing"}),  # 社外向け
         ("ユーザー向けの家計簿アプリ", {"marketing"}),
-        ("有料プランの見積機能をつけたWebアプリ", {"sales"}),
+        # 「有料」は販売の意図: 価格を決めるマーケティング部も招集
+        ("有料プランの見積機能をつけたWebアプリ", {"sales", "marketing"}),
     ],
 )
 def test_external_or_selling_goals_still_summon(goal: str, expected: set[str]) -> None:
@@ -110,3 +112,34 @@ def test_ascii_keywords_match_whole_words() -> None:
     assert summon_hits(sales, "Salesforce連携") == []
     assert "sales" in summon_hits(sales, "sales向けダッシュボード")
     assert "売れる" in summon_hits(sales, "売れる商品を作る")
+
+
+# --- selling goals co-summon 法務部 / マーケティング部 -----------------------------
+
+
+def test_selling_goal_summons_legal_and_marketing() -> None:
+    from ai_company.services.executive_meeting import select_attendees
+
+    for goal in (
+        "小さな備品貸出管理Webアプリを作って、社外の中小企業にも販売したい",
+        "備品管理アプリを有料で売りたい",
+        "社内勤怠を他社に提供したい",
+    ):
+        attendees, absentees = select_attendees(goal)
+        assert {"sales", "legal", "marketing"} <= set(attendees), goal
+        assert "legal" not in absentees and "marketing" not in absentees
+
+
+def test_internal_goals_do_not_co_summon() -> None:
+    from ai_company.services.executive_meeting import select_attendees
+
+    for goal in ("社内用のCLIツールを作る", "社内の売上集計ツールを作る", "ブログを作りたい"):
+        attendees, _ = select_attendees(goal)
+        assert "legal" not in attendees and "marketing" not in attendees, goal
+
+
+def test_selling_reason_is_reported_as_hit() -> None:
+    from ai_company.org import department_by_id, summon_hits
+
+    hits = summon_hits(department_by_id("legal"), "備品管理アプリを有料で売りたい")
+    assert hits == ["社外販売（契約・利用規約・個人情報）"]

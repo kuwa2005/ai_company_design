@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -88,6 +89,48 @@ def list_changed_since(workspace: Path, baseline: str | None) -> tuple[list[str]
     return changed, untracked
 
 
+def _file_digest(path: Path) -> str:
+    """Content hash of a working-tree file ('-' when missing / unreadable)."""
+    try:
+        if not path.is_file():
+            return "-"
+        h = hashlib.sha256()
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return "-"
+
+
+def snapshot_worktree(
+    workspace: Path, *, ignore_prefixes: list[str] | None = None
+) -> dict[str, str]:
+    """Dirty files (vs HEAD, incl. untracked) → content hash, taken before a run.
+
+    Lets ``collect_evidence`` blame a worker only for what *it* changed, not for
+    uncommitted output left by earlier workers in the same workspace.
+    """
+    ws = workspace.resolve()
+    changed, untracked = list_changed_since(ws, None)
+    out: dict[str, str] = {}
+    for f in [*changed, *untracked]:
+        rel = normalize_path(f, ws)
+        if _is_ignored(rel, ignore_prefixes):
+            continue
+        out[rel] = _file_digest(ws / rel)
+    return out
+
+
+def _is_ignored(path: str, ignore_prefixes: list[str] | None) -> bool:
+    norm = path.replace("\\", "/")
+    for prefix in ignore_prefixes or []:
+        p = prefix.replace("\\", "/").rstrip("/")
+        if p and (norm == p or norm.startswith(p + "/")):
+            return True
+    return False
+
+
 def normalize_path(path: str, workspace: Path) -> str:
     p = Path(path)
     try:
@@ -128,13 +171,28 @@ def collect_evidence(
     allow_writes: bool = True,
     allowed_paths: list[str] | None = None,
     forbidden_paths: list[str] | None = None,
+    pre_dirty: dict[str, str] | None = None,
+    ignore_prefixes: list[str] | None = None,
 ) -> EvidencePack:
-    """Compare worker-reported files against actual git changes since baseline."""
+    """Compare worker-reported files against actual git changes since baseline.
+
+    ``ignore_prefixes`` drops the orchestrator's own state (``.ai_company/``).
+    ``pre_dirty`` (from ``snapshot_worktree``) drops files that were already
+    dirty before the run and whose content this worker did not change.
+    """
     ws = workspace.resolve()
     reported = [normalize_path(f, ws) for f in (reported_files or []) if f]
     changed, untracked = list_changed_since(ws, baseline_ref)
-    changed_n = [normalize_path(f, ws) for f in changed]
-    untracked_n = [normalize_path(f, ws) for f in untracked]
+
+    def _keep(rel: str) -> bool:
+        if _is_ignored(rel, ignore_prefixes):
+            return False
+        if pre_dirty is not None and rel in pre_dirty:
+            return _file_digest(ws / rel) != pre_dirty[rel]
+        return True
+
+    changed_n = [r for r in (normalize_path(f, ws) for f in changed) if _keep(r)]
+    untracked_n = [r for r in (normalize_path(f, ws) for f in untracked) if _keep(r)]
     actual = set(changed_n) | set(untracked_n)
 
     pack = EvidencePack(
