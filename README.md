@@ -2,6 +2,27 @@
 
 人間は1つの常勤AIだけを操作し、その常勤AIが必要に応じて複数のCursor Coding Agentを短期雇用・指揮・終了するための基盤です。
 
+## インストール（ワンライン）
+
+Linux / WSL2 / macOS で、Python 3.12 以上と git があれば次の1行で入ります（sudo 不要）。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kuwa2005/ai_company_design/main/install.sh | bash
+```
+
+- 最新のリリース（タグ）を `~/.local/share/ai-company` に取得し、専用の Python 仮想環境に入れて、`~/.local/bin/ai-company` にコマンドを置きます。シェルの設定ファイルは変更しません（`~/.local/bin` が PATH に無ければ、追加する行を表示します）。
+- 実行前に中身を確認したい場合は、[install.sh](./install.sh) を読むか、`curl -fsSL …/install.sh -o install.sh` で保存してから `bash install.sh` を実行してください。
+- バージョンを指定: `… | bash -s -- --version v0.1.0`　更新: 同じ1行をもう一度　削除: `… | bash -s -- --uninstall`
+- 実際に開発させるには Cursor Agent CLI（`agent`）のインストールとログインが別途必要です。動作確認（`--runner mock`）だけなら不要です。
+
+```bash
+mkdir -p ~/workspace/my-app && cd ~/workspace/my-app && git init
+ai-company init && ai-company doctor
+ai-company start "小さなCLIツールを作る" --autonomous --runner mock
+```
+
+はじめての方は **[ユーザーズマニュアル.md](./ユーザーズマニュアル.md)** を参照してください。
+
 ## まず読む（利用者向け）
 
 | 文書 | 内容 |
@@ -185,7 +206,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 詳しい手順・例外対応は **[使用説明書.md](./使用説明書.md)** を参照してください。
 
-将来は GitHub からのワンライン導入（pipx / uvx）を想定しています。いまは editable + shim です。
+ワンライン導入は冒頭の「インストール（ワンライン）」を参照してください（`install.sh`）。上の手順はリポジトリを clone して開発する場合です。
 
 予算デフォルトは **$0（Cursor 月額プラン内想定）** です。追加USD枠は設けず、暴走防止は `max_runs` / 同時Worker上限で行います。時間枠の上限（hourly / daily の `max_runs`・`max_cost_usd`）に達すると、自動実行は「予算待ち（時間枠の上限）」で停止し、再開できる見込み時刻を案内します。
 
