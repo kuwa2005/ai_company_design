@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from ai_company.config import clear_config_cache, load_config
 from ai_company.db.models import AuditEvent, Task, TaskDependency
 from ai_company.enums import ProjectStatus, TaskKind, TaskStatus
-from ai_company.services.autonomous import run_autonomous
 from ai_company.services.closure_loops import maybe_spawn_closure_loop
 from ai_company.services.cursor_runner import build_cursor_command
 from ai_company.services.head_briefs import (
@@ -27,6 +26,7 @@ from ai_company.services.secretary import start_goal
 from ai_company.services.workers import dispatch_worker, hire_worker
 from tests.conftest import (
     drop_head_permissions,
+    run_until_released,
     write_settings_override,
     write_validation_override,
 )
@@ -110,7 +110,7 @@ def test_default_off_changes_nothing(db_session: Session, tmp_env: Path) -> None
     result = start_goal(db_session, SAAS_GOAL)
     assert result.head_brief_tasks == []
     assert _of_kind(db_session, result.project.id, TaskKind.HEAD_BRIEF.value) == []
-    assert len(result.work_order_tasks) == 4
+    assert len(result.work_order_tasks) == 6
     assert _events(db_session, "head_brief_requested") == []
 
 
@@ -122,9 +122,14 @@ def test_enabled_without_permission_profile_falls_back_at_filing(
     _enable_heads(tmp_env)
     result = start_goal(db_session, SAAS_GOAL)
     assert result.head_brief_tasks == []
-    assert len(result.work_order_tasks) == 4  # templates issued immediately
+    assert len(result.work_order_tasks) == 6  # templates issued immediately
     skipped = _events(db_session, "head_brief_skipped")
-    assert {e.metadata_json["department_id"] for e in skipped} == {"sales", "marketing", "legal"}
+    assert {e.metadata_json["department_id"] for e in skipped} == {
+        "sales",
+        "marketing",
+        "legal",
+        "operations",
+    }
     assert all("unknown_or_empty_role_profile" in e.metadata_json["reason"] for e in skipped)
 
 
@@ -140,6 +145,7 @@ def test_enabled_files_briefs_and_holds_templates(db_session: Session, tmp_env: 
         ("sales", "sales_director"),
         ("marketing", "marketing_director"),
         ("legal", "legal_director"),
+        ("operations", "operations_director"),
     ]
     for t in briefs:
         assert t.kind == TaskKind.HEAD_BRIEF
@@ -168,7 +174,7 @@ def test_max_heads_cap_issues_templates_for_the_rest(
     result = start_goal(db_session, SAAS_GOAL)
     assert [t.department_id for t in result.head_brief_tasks] == ["sales"]
     issued_depts = {t.department_id for t in result.work_order_tasks}
-    assert issued_depts == {"marketing", "legal"}
+    assert issued_depts == {"marketing", "legal", "operations"}
 
 
 def test_head_brief_is_read_only(db_session: Session, tmp_env: Path) -> None:
@@ -212,8 +218,8 @@ def test_on_with_mock_matches_off_and_completes(db_session: Session, tmp_env: Pa
     _grant_head_permissions(tmp_env)
     _enable_heads(tmp_env)
     on = start_goal(db_session, SAAS_GOAL)
-    auto = run_autonomous(
-        db_session, project_id=on.project.id, max_cycles=300, runner="mock", mock_succeed=True
+    auto = run_until_released(
+        db_session, on.project.id, max_cycles=300, runner="mock", mock_succeed=True
     )
     assert auto.release_candidate_id is not None, auto.stopped_reason
     db_session.refresh(on.project)

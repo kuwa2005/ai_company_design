@@ -330,13 +330,16 @@ def run_once(
 
     recovered = recover_orphaned_blocked_to_manager(session, config=cfg)
     if recovered:
-        progress(f"孤児停止をマネージャーへ移管: {len(recovered)} 件")
+        progress(f"孤児停止を直属の上司へ移管: {len(recovered)} 件")
 
     from ai_company.services.closure_loops import maybe_spawn_closure_loop
+    from ai_company.services.department_orders import release_stuck_design_gates
 
     for proj in session.scalars(
         select(Project).where(Project.status == ProjectStatus.ACTIVE)
     ).all():
+        # 起動できない部長所見・部門作業が、開発部の設計を永久に待たせないようにする
+        release_stuck_design_gates(session, project_id=proj.id, config=cfg)
         maybe_spawn_closure_loop(session, project_id=proj.id, config=cfg)
 
     slots_budget = max_to_start

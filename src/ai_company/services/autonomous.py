@@ -154,7 +154,28 @@ def _project_complete(session: Session, project_id: str) -> bool:
     if _open_document_work(session, project_id):
         # 部門作業（社長回答による改訂を含む）・部長所見が残っていれば未完了 (H-1)
         return False
-    return closure_loops_finished(session, project_id)
+    if not closure_loops_finished(session, project_id):
+        return False
+    # 社長への確認事項（価格・法務の最終確認など）が未回答ならリリース可にしない
+    from ai_company.services.meeting_questions import decisions_pending
+
+    return not decisions_pending(session, project_id)
+
+
+def _awaiting_decision(session: Session, project_id: str | None) -> bool:
+    """Nothing left to run; only the president's answers hold the release."""
+    if not project_id:
+        return any(
+            _awaiting_decision(session, p.id)
+            for p in session.scalars(
+                select(Project).where(Project.status == ProjectStatus.ACTIVE)
+            ).all()
+        )
+    from ai_company.services.delivery_state import project_delivery_phase
+
+    return project_delivery_phase(session, session.get(Project, project_id)) == (
+        "awaiting_decision"
+    )
 
 
 _DOCUMENT_WORK_KINDS = ("department_work", "head_brief", "attendance_review")
@@ -269,9 +290,18 @@ def create_release_candidate(
     )
     demo_ok = bool(demo_tasks) and all(t.status == TaskStatus.DONE for t in demo_tasks)
     phase_mark = "[x]" if phase == "release_ready" else "[ ]"
+    from ai_company.services.meeting_questions import (
+        numbered_meeting_questions,
+        resolved_meeting_questions,
+    )
+
+    open_q = numbered_meeting_questions(session, project.id)
+    answered = len(resolved_meeting_questions(session, project.id))
     checklist = [
         f"- {phase_mark} 進行フェーズ: {phase}",
         f"- {'[x]' if closure_ok else '[ ]'} 自問ループ完了",
+        f"- {'[ ]' if open_q else '[x]'} 社長への確認事項: 回答済み {answered} 件"
+        + (f"・未回答 {len(open_q)} 件" if open_q else ""),
         f"- [x] 出荷ポリシー: {policy_snapshot(cfg)}",
         f"- {'[x]' if demo_ok else '[ ]'} 管理者デモシナリオ通過"
         + (f"（{len(demo_tasks)} tasks）" if demo_tasks else "（デモタスク未作成）"),
@@ -440,7 +470,9 @@ def _complete_finished_projects(session: Session, result: AutonomousResult) -> l
 def _no_project_stop_reason(session: Session) -> str:
     """After completing projects without ``--project`` and nothing is runnable:
     "all done" only if no ACTIVE project is left, else idle_incomplete (M-1)."""
-    return "idle_incomplete" if _active_project_count(session) else "all_implementation_done"
+    if not _active_project_count(session):
+        return "all_implementation_done"
+    return "awaiting_decision" if _awaiting_decision(session, None) else "idle_incomplete"
 
 
 def _no_project_stop_progress(session: Session, result: AutonomousResult) -> str:
@@ -593,6 +625,9 @@ def continue_until_gate(
             elif not project_id and _complete_finished_projects(session, result):
                 result.stopped_reason = _no_project_stop_reason(session)
                 progress(_no_project_stop_progress(session, result))
+            elif _awaiting_decision(session, project_id):
+                result.stopped_reason = "awaiting_decision"
+                progress("継続実行停止  理由=社長の回答待ち（会議の確認事項が未回答）")
             else:
                 result.stopped_reason = "idle_incomplete"
                 progress("継続実行停止  理由=実行できるタスクがない")
@@ -759,6 +794,9 @@ def run_autonomous(
                 _record_release(result, art.id)
                 result.stopped_reason = "all_implementation_done"
                 progress(f"自動実行完了  理由=実装タスクすべて完了  候補={art.id}")
+            elif _awaiting_decision(session, project_id):
+                result.stopped_reason = "awaiting_decision"
+                progress("自動実行停止  理由=社長の回答待ち（会議の確認事項が未回答）")
             else:
                 result.stopped_reason = "idle_incomplete"
                 progress("自動実行停止  理由=実行できるタスクがない（未完了）")

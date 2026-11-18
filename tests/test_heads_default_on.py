@@ -14,11 +14,10 @@ from ai_company.db.models import Task
 from ai_company.enums import TaskKind
 from ai_company.org import org_unit_ids_for_task
 from ai_company.roles import supervisor_of
-from ai_company.services.autonomous import run_autonomous
 from ai_company.services.policy_engine import evaluate_dispatch
 from ai_company.services.prompt_builder import load_role_prompt
 from ai_company.services.secretary import start_goal, understand_goal
-from tests.conftest import write_validation_override
+from tests.conftest import run_until_released, write_validation_override
 
 REPO = Path(__file__).resolve().parents[1]
 SAAS_GOAL = "顧客向けの勤怠管理Webサービスを作って販売したい"
@@ -67,12 +66,9 @@ def test_shipped_defaults_complete_saas_goal_within_hourly_cap(
     assert result.head_brief_tasks, result.head_brief_skipped
     assert not result.head_brief_skipped
 
-    auto = run_autonomous(
-        db_session,
-        project_id=result.project.id,
-        max_cycles=300,
-        runner="mock",
-        mock_succeed=True,
+    # 社長への確認事項（価格・法務・本番体制）に回答してから完了まで流す
+    auto = run_until_released(
+        db_session, result.project.id, max_cycles=300, runner="mock", mock_succeed=True
     )
     assert auto.budget_wait is None
     assert auto.release_candidate_id is not None, auto.stopped_reason

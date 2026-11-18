@@ -86,7 +86,7 @@ class MeetingResolutionsConfig(BaseModel):
     """重役会議の決議 → 部門作業指示（Work Order）の起票上限."""
 
     enabled: bool = True
-    max_orders_per_meeting: int = Field(default=4, ge=0)
+    max_orders_per_meeting: int = Field(default=6, ge=0)
     max_orders_per_department: int = Field(default=2, ge=0)
     # 0 = 件数上限のみ（定額サブスク運用）
     max_estimated_cost_per_meeting_usd: float = Field(default=0.0, ge=0.0)
@@ -99,11 +99,16 @@ class MeetingResolutionsConfig(BaseModel):
     # 社長の回答（decide）を後続の Worker プロンプトへ DATA として渡す
     inject_decisions: bool = True
     # 回答を受けて「完了済みの部門作業の改訂」を起票する上限（案件あたり）。0 = 起票しない
-    max_decision_revisions_per_project: int = Field(default=3, ge=0)
+    max_decision_revisions_per_project: int = Field(default=6, ge=0)
     # 部門作業の成果物を <project>/<deliverables_dir>/<部 id>/<task id>.md に書き出す。
     # 書き込むのは秘書側（決定論的なコード）で、部門作業の Worker は読み取り専用のまま。
     write_deliverables: bool = True
     deliverables_dir: str = "docs"
+    # 開発部の最初の設計タスクを、これらの部門作業の完了まで待たせる（成果は DATA として
+    # 設計・実装のプロンプトに渡す）。空 = 待たせない（並行して進める）
+    design_waits_for: list[str] = Field(
+        default_factory=lambda: ["marketing.value", "legal.precheck"]
+    )
 
 
 class HeadLLMConfig(BaseModel):
@@ -147,6 +152,9 @@ class AttendanceReviewConfig(BaseModel):
 class ExecutiveMeetingConfig(BaseModel):
     head_llm: HeadLLMConfig = Field(default_factory=HeadLLMConfig)
     attendance_review: AttendanceReviewConfig = Field(default_factory=AttendanceReviewConfig)
+    # 会議の「社長への確認事項」が未回答のうちは、自問まで終わってもリリース可にしない
+    # （進行フェーズ awaiting_decision。ai-company decide で回答すると完了できる）
+    require_decisions_before_release: bool = True
 
 
 class SettingsConfig(BaseModel):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -240,6 +241,13 @@ def start_cmd(
                 "— 部長 Worker の判断後にその部の部門作業を起票",
                 markup=False,
             )
+        gated = _design_gates(session, result.tasks)
+        if gated:
+            console.print(
+                f"設計の開始待ち: {gated} — 終わってから開発部が設計を始めます"
+                "（成果は設計・実装の前提として渡します）",
+                markup=False,
+            )
         if result.head_brief_skipped:
             from ai_company.org import department_by_id
 
@@ -429,6 +437,25 @@ def meeting_cmd(
         understand_goal(goal), all_departments=all_departments
     )
     console.print(render_minutes_markdown(minutes), markup=False)
+
+
+def _design_gates(session: Any, tasks: list[Any]) -> str:
+    """「最初の設計が待っている部門作業・部長所見」の表示用ラベル（無ければ空）."""
+    from sqlalchemy import select
+
+    from ai_company.db.models import Task, TaskDependency
+
+    names: list[str] = []
+    for task in tasks:
+        for dep_id in session.scalars(
+            select(TaskDependency.depends_on_task_id).where(TaskDependency.task_id == task.id)
+        ).all():
+            dep = session.get(Task, dep_id)
+            if dep is not None and dep.kind in ("department_work", "head_brief"):
+                label = single_line(dep.title)[:40]
+                if label not in names:
+                    names.append(label)
+    return "、".join(names)
 
 
 @app.command("redact")

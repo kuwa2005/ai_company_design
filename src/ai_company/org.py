@@ -5,11 +5,11 @@ This module holds *which department / section a role belongs to* (the
 organizational home), plus the department heads (部長) who attend the
 executive meeting (重役会議).
 
-The two views are intentionally separate:
+The two views must agree:
 
-- Escalation stays on the proven ``reports_to`` chain (worker → 実装マネージャー
-  → 技術責任者 → 社長). Department heads are *not* inserted into that chain, so
-  adding a department never creates new spawnable replan roles by accident.
+- Escalation follows ``reports_to``: 担当 → 課長（いれば）→ 部長 → 社長.
+  ``validate_org`` reports any member whose chain skips its own 部長 (or 課長),
+  e.g. 品質保証部の判定が開発部の課長に上がる、営業担当が秘書に上がる.
 - Department membership is used for planning, meeting minutes, and status
   display ("この仕事はどの部のどの課が持っているか").
 """
@@ -95,9 +95,9 @@ DEPARTMENTS: tuple[Department, ...] = (
             Section(
                 id="verification",
                 name_ja="検証課",
-                member_roles=("acceptance_engineer", "test_reviewer", "edge_case_reviewer"),
+                member_roles=("acceptance_engineer",),
                 chief_role="engineering_manager",
-                handles="E2E・受け入れ・境界条件の検証（実装者とは別人）",
+                handles="E2E・受け入れ・デモシナリオのテスト作成（合否判定は品質保証部）",
             ),
         ),
     ),
@@ -113,12 +113,14 @@ DEPARTMENTS: tuple[Department, ...] = (
                 id="independent_review",
                 name_ja="独立検証課",
                 member_roles=(
+                    "test_reviewer",
                     "spec_reviewer",
                     "security_reviewer",
+                    "edge_case_reviewer",
                     "architecture_reviewer",
                     "reviewer",
                 ),
-                handles="仕様・セキュリティ・設計の独立レビュー",
+                handles="テスト・仕様・セキュリティ・境界条件・設計の独立検証（実装部門から独立）",
             ),
             Section(
                 id="judgement",
@@ -209,9 +211,18 @@ DEPARTMENTS: tuple[Department, ...] = (
         mission="作ったものを運用できる状態にし、保守し続ける",
         keywords=(
             "運用", "保守", "サーバ", "インフラ", "ネットワーク", "デプロイ",
-            "監視", "バックアップ", "権限", "ops", "infra",
+            "監視", "バックアップ", "権限", "本番", "可用性", "障害対応",
+            "クラウド", "ホスティング", "sla", "ops", "infra",
         ),
+        # 社内の「SaaS 管理台帳」なども作るので弱い語扱い（社外向けは同時招集で拾う）
+        weak_keywords=("saas", "月額", "サブスク"),
         sections=(
+            Section(
+                id="infrastructure",
+                name_ja="インフラ課",
+                member_roles=("infra_engineer",),
+                handles="本番環境・ネットワーク・監視・バックアップ・障害対応の設計",
+            ),
             Section(
                 id="it_systems",
                 name_ja="情報システム課",
@@ -272,11 +283,13 @@ def _keyword_in(keyword: str, lower: str) -> bool:
     return keyword in lower
 
 
-# 社外に売る・提供する依頼では、営業部だけでなく契約・利用規約・個人情報（法務部）と
-# 価値提案・価格（マーケティング部）も会議の段階で要る。キーワードが依頼文に無くても招集する。
+# 社外に売る・提供する依頼では、営業部だけでなく契約・利用規約・個人情報（法務部）、
+# 価値提案・価格（マーケティング部）、本番運用・保守（運用保守部）も会議の段階で要る。
+# キーワードが依頼文に無くても招集する。
 SELLING_CO_SUMMON: dict[str, str] = {
     "legal": "社外販売（契約・利用規約・個人情報）",
     "marketing": "社外販売（価値提案・価格）",
+    "operations": "社外提供（本番運用・障害対応・保守）",
 }
 
 
@@ -440,6 +453,35 @@ def validate_org() -> list[str]:
             continue
         if role_id not in homed:
             problems.append(f"role without department: {role_id}")
+    problems.extend(reporting_line_problems())
+    return problems
+
+
+def reporting_line_problems() -> list[str]:
+    """Members whose escalation chain skips their own 課長 / 部長.
+
+    A role may sit in several sections (coding_worker); each placement is checked.
+    The secretary's own sections report to the secretary (= 秘書室長).
+    """
+    from ai_company.roles import escalation_chain
+
+    problems: list[str] = []
+    for dept in DEPARTMENTS:
+        for section in dept.sections:
+            for role in section.member_roles:
+                if role not in ROLES:
+                    continue
+                chain = escalation_chain(role)
+                if section.chief_role and section.chief_role not in chain:
+                    problems.append(
+                        f"{dept.id}/{section.id}: {role} does not report to "
+                        f"課長 {section.chief_role}"
+                    )
+                if dept.head_role not in chain:
+                    problems.append(
+                        f"{dept.id}/{section.id}: {role} does not report to "
+                        f"部長 {dept.head_role}"
+                    )
     return problems
 
 

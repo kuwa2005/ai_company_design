@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import ai_company.services.secretary as secretary_mod
-from ai_company.db.models import AuditEvent, StaffingRequest, Task, Worker
+from ai_company.db.models import AuditEvent, StaffingRequest, Task, TaskDependency, Worker
 from ai_company.enums import TaskStatus
 from ai_company.services.scheduler import run_once
 from ai_company.services.secretary import start_goal, understand_goal
@@ -97,8 +97,18 @@ def test_dependency_chain_from_secretary(db_session: Session, tmp_env: Path) -> 
     result = start_goal(db_session, "勤怠Webアプリを作る")
     waiting = [t for t in result.tasks if t.status == TaskStatus.WAITING]
     ready = [t for t in result.tasks if t.status == TaskStatus.READY]
-    assert ready  # at least root task
+    # 勤怠 → 法務部が出席し、最初の設計は法務事前点検（部長所見）を待つ
+    assert not ready
     assert waiting  # dependents wait
+    root = result.tasks[0]
+    deps = {
+        d.depends_on_task_id
+        for d in db_session.scalars(
+            select(TaskDependency).where(TaskDependency.task_id == root.id)
+        ).all()
+    }
+    gates = {t.id for t in result.head_brief_tasks} | {t.id for t in result.work_order_tasks}
+    assert deps and deps <= gates
 
 
 def test_scheduler_not_secretary_dispatches(db_session: Session, tmp_env: Path) -> None:

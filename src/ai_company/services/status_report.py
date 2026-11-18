@@ -53,6 +53,7 @@ def human_summary(session: Session, *, project_id: str | None = None) -> str:
         "impl_queue_empty_closure_running": "実装キュー空／自問ループ中（Goal未充足）",
         "impl_done_closure_pending": "実装消化済／自問未着手",
         "release_ready": "リリース可（自問完了）",
+        "awaiting_decision": "社長の回答待ち（自問完了・確認事項が未回答）",
         "blocked": "停止あり（要判断）",
         "idle_incomplete": "実行待ちなし／未完了あり",
         "no_project": "案件なし",

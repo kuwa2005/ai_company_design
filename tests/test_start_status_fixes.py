@@ -65,7 +65,7 @@ def test_cli_start_lists_work_orders(tmp_env: Path) -> None:
 
     out = CliRunner().invoke(app, ["start", SAAS_GOAL])
     assert out.exit_code == 0, out.output
-    assert "部門作業指示: 4" in out.output
+    assert "部門作業指示: 6" in out.output
     assert "営業部／" in out.output
 
 
@@ -79,7 +79,7 @@ def test_cli_start_shows_all_heads_skipped(tmp_env: Path) -> None:
     write_settings_override(tmp_env, executive_meeting={"head_llm": {"enabled": True}})
     out = CliRunner().invoke(app, ["start", SAAS_GOAL])
     assert out.exit_code == 0, out.output
-    assert "部長所見を見送り: 3部" in out.output
+    assert "部長所見を見送り: 4部" in out.output
     assert "営業部:" in out.output and "法務部:" in out.output
     assert "部長が全員見送り" in out.output
     assert "permissions.yaml" in out.output
@@ -90,7 +90,7 @@ def test_start_result_records_skipped_heads(db_session: Session, tmp_env: Path) 
     write_settings_override(tmp_env, executive_meeting={"head_llm": {"enabled": True}})
     result = start_goal(db_session, SAAS_GOAL)
     assert result.head_brief_tasks == []
-    assert set(result.head_brief_skipped) == {"sales", "marketing", "legal"}
+    assert set(result.head_brief_skipped) == {"sales", "marketing", "legal", "operations"}
 
 
 def test_cli_start_partial_skip_has_no_all_skipped_hint(tmp_env: Path) -> None:
@@ -105,7 +105,7 @@ def test_cli_start_partial_skip_has_no_all_skipped_hint(tmp_env: Path) -> None:
     out = CliRunner().invoke(app, ["start", SAAS_GOAL])
     assert out.exit_code == 0, out.output
     assert "部長所見: 1件" in out.output
-    assert "部長所見を見送り: 2部" in out.output
+    assert "部長所見を見送り: 3部" in out.output
     assert "部長が全員見送り" not in out.output
 
 

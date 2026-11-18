@@ -18,9 +18,9 @@ from sqlalchemy.orm import Session
 from ai_company.config import clear_config_cache
 from ai_company.db.models import AuditEvent
 from ai_company.enums import ProjectStatus, TaskKind, TaskStatus
-from ai_company.services.autonomous import run_autonomous
 from ai_company.services.closure_loops import maybe_spawn_closure_loop
 from ai_company.services.secretary import start_goal
+from tests.conftest import run_until_released
 from tests.test_head_briefs import (
     HEADS,
     SAAS_GOAL,
@@ -141,9 +141,7 @@ def test_autonomous_completes_when_heads_can_never_run(
     path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
     clear_config_cache()
 
-    auto = run_autonomous(
-        db_session, project_id=result.project.id, max_cycles=300, runner="mock"
-    )
+    auto = run_until_released(db_session, result.project.id, max_cycles=300, runner="mock")
     assert auto.release_candidate_id is not None, auto.stopped_reason
     db_session.refresh(result.project)
     assert result.project.status == ProjectStatus.DONE

@@ -348,7 +348,7 @@ def hand_to_manager(
     reason: str = "orphan_recover:hand_to_nearest_manager",
     config: AppConfig | None = None,
 ) -> Approval | Task:
-    """Explicitly give a stuck task to engineering_manager (not the president)."""
+    """Explicitly give a stuck task to its direct supervisor (課長・部長), not the president."""
     cfg = config or load_config()
     return escalate_blocked_task(session, task=task, reason=reason, config=cfg)
 
@@ -382,11 +382,12 @@ def recover_orphaned_blocked_to_manager(
             reason = f"orphan_recover:{base_reason}"
         else:
             reason = base
+        boss = supervisor_of(task.role_required or "") or MANAGER_ROLE
         hand_to_manager(session, task=task, reason=reason, config=cfg)
         recovered.append(task.id)
         progress(
             f"孤児停止を回収  {task.id}「{task.title}」→ "
-            f"{format_role_label(MANAGER_ROLE)} へ移管（社長キュー空のため）"
+            f"{format_role_label(boss)} へ移管（社長キュー空のため）"
         )
     return recovered
 

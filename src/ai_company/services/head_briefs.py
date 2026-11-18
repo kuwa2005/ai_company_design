@@ -14,8 +14,9 @@ Flow when enabled::
 Invariants:
 
 - The meeting / secretary never calls an LLM or starts a worker directly.
-- Heads are read-only (``head_brief`` is a read-only kind) and are not in any
-  worker's ``reports_to`` chain; a failed brief never escalates to a manager.
+- Heads are read-only (``head_brief`` is a read-only kind). A failed brief
+  never escalates (it falls back to the template). Heads *are* the supervisors
+  of their departments' members for other failures (``replan``, read-only).
 - A head can only file work for its own department, inside its own sections,
   with roles of that section, under the same ``meeting_resolutions`` caps.
   Requests to other departments are text only (``handoff_requests``).
@@ -319,6 +320,15 @@ def _file_head_briefs(
         )
         session.flush()
         result.tasks.append(task)
+        waits = set(cfg.settings.meeting_resolutions.design_waits_for)
+        if any(o.key in waits for o in dept_held):
+            # 部長が非目標・法務論点の指示を出すまで、開発部の最初の設計を待たせる
+            from ai_company.services.department_orders import gate_design_on
+
+            gate_design_on(
+                session, project_id=project_id, gate_task=task, reason=f"head_brief:{dept_id}",
+                config=cfg,
+            )
         record_audit(
             session,
             event_type="head_brief_requested",
@@ -696,9 +706,12 @@ def close_failed_head_brief(
     session: Session, *, task: Task, reason: str, config: AppConfig | None = None
 ) -> None:
     """Retries exhausted / stalled: fall back and close without escalation."""
+    from ai_company.services.tasks import refresh_dependents
+
     fallback_head_brief(session, task=task, reason=reason, config=config)
     task.status = TaskStatus.CANCELLED
     session.flush()
+    refresh_dependents(session, task.id)
 
 
 def settle_stalled_head_briefs(

@@ -110,7 +110,8 @@ def test_closure_prompt_includes_department_work_summary(db_session: Session) ->
         assert f"] {t.title} (" not in prompt
 
 
-def test_non_closure_prompt_has_no_department_results(db_session: Session) -> None:
+def test_build_prompt_reads_department_results_as_premises(db_session: Session) -> None:
+    """設計・実装は他部門の成果を前提（DATA）として読む。課題3（2026-11-19）."""
     result = start_goal(db_session, SAAS_GOAL)
     legal = next(t for t in _dept_work(db_session, result.project.id) if t.department_id == "legal")
     data = json.loads(legal.constraints)
@@ -122,7 +123,31 @@ def test_non_closure_prompt_has_no_department_results(db_session: Session) -> No
         for t in db_session.scalars(select(Task).where(Task.project_id == result.project.id))
         if t.kind == "implementation"
     )
-    assert "Department Work Results" not in build_task_prompt(impl, session=db_session)
+    prompt = build_task_prompt(impl, session=db_session)
+    assert "Department Work Results" in prompt
+    assert "respect the non-goals" in prompt
+    assert "> 要約" in prompt
+
+
+def test_validation_prompt_has_no_department_results(db_session: Session) -> None:
+    result = start_goal(db_session, SAAS_GOAL)
+    legal = next(t for t in _dept_work(db_session, result.project.id) if t.department_id == "legal")
+    data = json.loads(legal.constraints)
+    data["work_order_summary"] = "要約"
+    legal.constraints = json.dumps(data, ensure_ascii=False)
+    db_session.flush()
+    from ai_company.services.tasks import create_task
+
+    review = create_task(
+        db_session,
+        title="Validate[test]: x",
+        project_id=result.project.id,
+        objective="x",
+        role_required="test_reviewer",
+        kind="validation",
+        review_type="test",
+    )
+    assert "Department Work Results" not in build_task_prompt(review, session=db_session)
 
 
 def test_closure_prompt_without_department_work_is_unchanged(db_session: Session) -> None:

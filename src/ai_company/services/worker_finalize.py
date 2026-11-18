@@ -499,7 +499,7 @@ def _finalize_execution(
             metadata={"reason": "timeout", "retry_count": task.retry_count},
         )
     if task.retry_count > task.max_retries and task.kind in {TaskKind.HEAD_BRIEF, "head_brief"}:
-        # 部長は reports_to 経路に入らない: 上申せず、保留テンプレートを起票して閉じる。
+        # 部長所見そのものの失敗は上申しない: 保留テンプレートを起票して閉じる。
         from ai_company.services.head_briefs import close_failed_head_brief
 
         close_failed_head_brief(

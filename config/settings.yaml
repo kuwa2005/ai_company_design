@@ -43,6 +43,7 @@ staffing:
     compliance_auditor: 1
     test_auditor: 1
     it_operations: 1
+    infra_engineer: 1
     sales: 1
     maintenance: 1
     sales_director: 1
@@ -54,15 +55,18 @@ staffing:
 # 上限は「起票の上限」で、実行時の並列数・予算は role_capacity / Cost Governor が別に効く。
 meeting_resolutions:
   enabled: true
-  max_orders_per_meeting: 4
+  max_orders_per_meeting: 6                 # 営業2・マーケ1・法務1・運用保守2（インフラ課を含む）が収まる件数
   max_orders_per_department: 2
   max_estimated_cost_per_meeting_usd: 0.0   # 0 = 件数上限のみ（定額サブスク運用）
   priority_ceiling: 80                      # 計画の中核タスク（〜85）を追い越さない
   departments: [legal, sales, marketing, operations]
   inject_decisions: true                    # 社長の回答（decide）を後続プロンプトへ DATA として渡す
-  max_decision_revisions_per_project: 3     # 回答で完了済みの部門作業を改訂する上限（0 = しない）
+  max_decision_revisions_per_project: 6     # 回答で完了済みの部門作業を改訂する上限（0 = しない）。部門作業の最大件数に合わせる
   write_deliverables: true                  # 部門の成果物を <案件dir>/docs/<部>/<タスクid>.md に書き出す（秘書が書く。Worker は読み取り専用のまま）
   deliverables_dir: docs
+  # 開発部の最初の設計タスクは、これらの部門作業が終わるまで待つ（非目標・法務論点を設計の前提にする）。
+  # 部門作業が失敗・取り消しになった場合は待たない。[] にすると従来どおり並行して進める。
+  design_waits_for: [marketing.value, legal.precheck]
 
 # 部長を短命 Worker（kind=head_brief, 読み取り専用）として呼ぶ機能。既定オン（2026-11-18 社長判断）。
 # 止めるときは enabled: false（会議テンプレートの Work Order だけを起票する）。
@@ -70,6 +74,10 @@ meeting_resolutions:
 # config/permissions.yaml に同梱済み（社長承認 2026-11-18）。オンにすると Goal が部長のプロンプトにも送られる。
 # プロファイルが無い部長は起票せず、その部はテンプレートの Work Order にフォールバックする。
 executive_meeting:
+  # 会議の「社長への確認事項」（価格・法務の最終確認・本番体制など）が未回答のうちは、
+  # 自問まで終わってもリリース可にしない（進行フェーズ awaiting_decision）。
+  # ai-company decide <番号> "回答" で回答すると完了できる。false で従来どおり（確認事項は表示のみ）。
+  require_decisions_before_release: true
   head_llm:
     enabled: true   # 既定オン（2026-11-18 社長判断）。Goal が部長のプロンプトにも送られる
     departments: [sales, marketing, legal, operations]

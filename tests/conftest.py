@@ -124,3 +124,49 @@ def drop_head_permissions(tmp_env: Path) -> None:
         data["profiles"].pop(role, None)
     path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
     clear_config_cache()
+
+
+def answer_meeting_questions(session: object, project_id: str, answer: str = "テスト回答") -> int:
+    """Answer every open 社長への確認事項 of a project (as ``ai-company decide`` would).
+
+    Release now waits for these answers (``require_decisions_before_release``);
+    tests about something else answer them up front. Returns how many were answered.
+    """
+    from ai_company.services.meeting_questions import (
+        numbered_meeting_questions,
+        resolve_meeting_question,
+    )
+
+    n = 0
+    for number, _ in numbered_meeting_questions(session, project_id):  # type: ignore[arg-type]
+        resolve_meeting_question(
+            session,  # type: ignore[arg-type]
+            project_id=project_id,
+            number=number,
+            answer=answer,
+        )
+        n += 1
+    return n
+
+
+def run_until_released(session: object, project_id: str, **kwargs: object) -> object:
+    """``run_autonomous``; if it stops only for the president's answers, answer and resume."""
+    from ai_company.services.autonomous import run_autonomous
+
+    auto = run_autonomous(session, project_id=project_id, **kwargs)  # type: ignore[arg-type]
+    for _ in range(3):
+        if getattr(auto, "stopped_reason", "") != "awaiting_decision":
+            break
+        answer_meeting_questions(session, project_id)
+        auto = run_autonomous(session, project_id=project_id, **kwargs)  # type: ignore[arg-type]
+    return auto
+
+
+def disable_decision_gate(tmp_env: Path) -> None:
+    """Legacy release rule: open 社長への確認事項 do not hold the release.
+
+    For tests of other completion paths (multi-project continue, decide after DONE).
+    """
+    write_settings_override(
+        tmp_env, executive_meeting={"require_decisions_before_release": False}
+    )

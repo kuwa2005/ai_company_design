@@ -52,6 +52,7 @@ ROLE_JA = {
     "compliance_auditor": "法務・コンプライアンス",
     "test_auditor": "テスト監査",
     "it_operations": "情報システム",
+    "infra_engineer": "インフラ担当",
     "sales": "営業",
     "maintenance": "保守担当",
     "reviewer": "レビュー",

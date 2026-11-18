@@ -26,7 +26,15 @@ def test_org_unit_rules() -> None:
         "development",
         "verification",
     )
-    assert org_unit_ids_for_task("x", "test_reviewer") == ("development", "verification")
+    # 合否判定に関わる検証は品質保証部（実装部門から独立）
+    assert org_unit_ids_for_task("x", "test_reviewer") == (
+        "quality_assurance",
+        "independent_review",
+    )
+    assert org_unit_ids_for_task("x", "edge_case_reviewer") == (
+        "quality_assurance",
+        "independent_review",
+    )
     assert org_unit_ids_for_task("x", "security_reviewer") == (
         "quality_assurance",
         "independent_review",

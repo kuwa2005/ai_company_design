@@ -26,7 +26,10 @@ def project_delivery_phase(session: Session, project: Project | None) -> str:
 
     Returns one of:
       implementing | impl_queue_empty_closure_running | impl_done_closure_pending
-      | release_ready | blocked | idle_incomplete | no_project
+      | awaiting_decision | release_ready | blocked | idle_incomplete | no_project
+
+    ``awaiting_decision``: everything is done but the meeting's 社長への確認事項
+    are unanswered (``executive_meeting.require_decisions_before_release``).
     """
     if project is None:
         return "no_project"
@@ -69,6 +72,10 @@ def project_delivery_phase(session: Session, project: Project | None) -> str:
     if impl_done and not closure_done:
         return "impl_done_closure_pending"
     if impl_done and closure_done:
+        from ai_company.services.meeting_questions import decisions_pending
+
+        if decisions_pending(session, project.id):
+            return "awaiting_decision"
         return "release_ready"
     if open_impl == 0:
         return "idle_incomplete"

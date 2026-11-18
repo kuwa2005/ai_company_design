@@ -16,6 +16,7 @@ from ai_company.services.autonomous import (
 )
 from ai_company.services.secretary import start_goal
 from ai_company.services.tasks import create_project
+from tests.conftest import disable_decision_gate
 from tests.test_resume_guidance import INTERNAL, SAAS, _caps
 
 
@@ -30,6 +31,7 @@ def test_project_not_complete_while_department_work_open(
     db_session: Session, tmp_env: Path
 ) -> None:
     _caps(tmp_env, 10000)
+    disable_decision_gate(tmp_env)
     pid = _finish(db_session, SAAS)
     assert _project_complete(db_session, pid)
     order = db_session.scalar(
@@ -67,6 +69,7 @@ def test_no_project_continue_reports_incomplete_when_other_project_remains(
     db_session: Session, tmp_env: Path
 ) -> None:
     _caps(tmp_env, 10000)
+    disable_decision_gate(tmp_env)
     done_pid = start_goal(db_session, INTERNAL).project.id
     # An ACTIVE project with nothing runnable and no closure → can never complete here.
     stuck = create_project(db_session, name="stuck", goal="stuck")
@@ -84,6 +87,7 @@ def test_no_project_continue_all_done_when_nothing_left(
     db_session: Session, tmp_env: Path
 ) -> None:
     _caps(tmp_env, 10000)
+    disable_decision_gate(tmp_env)
     pid = start_goal(db_session, INTERNAL).project.id
     result = continue_until_gate(db_session, max_cycles=300, runner="mock")
     assert result.completed_project_ids == [pid]
@@ -92,6 +96,7 @@ def test_no_project_continue_all_done_when_nothing_left(
 
 def test_all_release_candidates_are_reported(db_session: Session, tmp_env: Path) -> None:
     _caps(tmp_env, 10000)
+    disable_decision_gate(tmp_env)
     a = start_goal(db_session, INTERNAL).project.id
     b = start_goal(db_session, "社内の備品管理ツールを作る").project.id
     result = continue_until_gate(db_session, max_cycles=400, runner="mock")
@@ -109,6 +114,7 @@ def test_cli_continue_lists_all_release_candidates(db_session: Session, tmp_env:
     from ai_company.cli import app
 
     _caps(tmp_env, 10000)
+    disable_decision_gate(tmp_env)
     start_goal(db_session, INTERNAL)
     start_goal(db_session, "社内の備品管理ツールを作る")
     db_session.commit()

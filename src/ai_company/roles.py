@@ -54,8 +54,10 @@ ROLES: dict[str, RoleDef] = {
         handles="実装マネージャーで解決できない技術判断・部門横断の再計画",
     ),
     # 部長（department heads）. They attend the executive meeting (重役会議) and
-    # own a department in ``org.py``. They are deliberately NOT in any worker's
-    # reports_to chain, so escalation never spawns a "director replan" worker.
+    # own a department in ``org.py``. Every member of a department reports (via
+    # its 課長 when there is one) to its 部長, so a failure in 営業部 is decided by
+    # 営業部長 — not by the secretary or the engineering line. ``validate_org``
+    # checks this. A director's decision is a read-only ``replan`` worker.
     "qa_director": RoleDef(
         id="qa_director",
         title_ja="品質保証部長",
@@ -95,7 +97,7 @@ ROLES: dict[str, RoleDef] = {
         id="judge",
         title_ja="判定",
         layer="specialist",
-        reports_to="engineering_manager",
+        reports_to="qa_director",
         handles="独立検証結果の PASS/REJECT 判定",
     ),
     "coding_worker": RoleDef(
@@ -117,21 +119,21 @@ ROLES: dict[str, RoleDef] = {
         title_ja="受け入れテスト担当",
         layer="worker",
         reports_to="engineering_manager",
-        handles="E2E・受け入れ・デモシナリオの自動テスト作成（開発部／検証課。中核実装者とは別の担当）",
+        handles="E2E・受け入れ・デモシナリオの自動テスト作成（開発部／検証課。合否判定は品質保証部）",
     ),
     "backend_engineer": RoleDef(
         id="backend_engineer",
         title_ja="バックエンド",
         layer="worker",
         reports_to="engineering_manager",
-        handles="API・データモデル等の実装",
+        handles="API・データモデル・永続化・認可などサーバ側の実装",
     ),
     "frontend_engineer": RoleDef(
         id="frontend_engineer",
         title_ja="フロントエンド",
         layer="worker",
         reports_to="engineering_manager",
-        handles="Web UI 実装",
+        handles="画面・操作フロー・入力検証・アクセシビリティなど Web UI の実装",
     ),
     "test_reviewer": RoleDef(
         id="test_reviewer",
@@ -179,56 +181,56 @@ ROLES: dict[str, RoleDef] = {
         id="product_planner",
         title_ja="商品企画",
         layer="specialist",
-        reports_to="secretary",
+        reports_to="marketing_director",
         handles="価値適合・優先機能・非目標の点検と企画改善タスク起票",
     ),
     "usability_auditor": RoleDef(
         id="usability_auditor",
         title_ja="使い勝手監査",
         layer="specialist",
-        reports_to="secretary",
+        reports_to="qa_director",
         handles="動く完成品の使い勝手改善余地を自問し、改善タスクを起票",
     ),
     "customer_success": RoleDef(
         id="customer_success",
         title_ja="カスタマーサクセス",
         layer="specialist",
-        reports_to="secretary",
+        reports_to="sales_director",
         handles="導入・定着・運用しやすさの点検とCS改善タスク起票",
     ),
     "compliance_auditor": RoleDef(
         id="compliance_auditor",
         title_ja="法務・コンプライアンス（ミニ）",
         layer="specialist",
-        reports_to="secretary",
+        reports_to="legal_director",
         handles="個人情報・労働法制・監査ログ等の最小コンプライアンス点検",
     ),
     "test_auditor": RoleDef(
         id="test_auditor",
         title_ja="テスト監査",
         layer="specialist",
-        reports_to="secretary",
+        reports_to="qa_director",
         handles="テストが緑でも正しいとは限らない前提で、テスト妥当性を監査し是正を起票",
     ),
     "quality_auditor": RoleDef(
         id="quality_auditor",
         title_ja="品質監査（品質向上レビュー）",
         layer="specialist",
-        reports_to="secretary",
+        reports_to="qa_director",
         handles="完成品の品質レビュー（本当にこれでよかったか／改善余地）",
     ),
     "sales": RoleDef(
         id="sales",
         title_ja="営業担当",
         layer="specialist",
-        reports_to="secretary",
+        reports_to="sales_director",
         handles="提案・デモ・価格メモなど売るための最小資料の起票",
     ),
     "maintenance": RoleDef(
         id="maintenance",
         title_ja="保守担当",
         layer="specialist",
-        reports_to="secretary",
+        reports_to="operations_director",
         handles="保守費・永続運用のための手順／契約前提資料の起票",
     ),
     "reviewer": RoleDef(
@@ -242,8 +244,15 @@ ROLES: dict[str, RoleDef] = {
         id="it_operations",
         title_ja="情報システム",
         layer="worker",
-        reports_to="technical_director",
+        reports_to="operations_director",
         handles="権限・シード・運用手順・『動くが運用不能』の防止",
+    ),
+    "infra_engineer": RoleDef(
+        id="infra_engineer",
+        title_ja="インフラ担当",
+        layer="worker",
+        reports_to="operations_director",
+        handles="本番環境・ネットワーク・監視・バックアップ・障害対応の設計（運用保守部／インフラ課）",
     ),
 }
 

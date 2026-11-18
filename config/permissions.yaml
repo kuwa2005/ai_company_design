@@ -43,7 +43,8 @@ profiles:
       - task.prioritize
       - staffing.request
       - validation.read
-  # 部長（重役会議の出席者）。部長所見（head_brief）は読み取り専用の短命 Worker。
+  # 部長（重役会議の出席者）。部長所見（head_brief）と、部下の失敗を受けた上司判断（replan）は
+  # 読み取り専用の短命 Worker（2026-11-19: 各部の担当は自部の部長へ上申する）。
   # 書き込み・シェル・タスク起票の権限は持たせない（起票は秘書が検証してから行う）。
   qa_director:
     permissions:
@@ -165,6 +166,12 @@ profiles:
       - code.read
       - task.create
       - project.report
+  # 運用保守部／インフラ課（2026-11-19 追加）。本番環境・監視・バックアップ・障害対応の
+  # 設計文書（department_work）だけを書く。成果物は秘書が docs/ に保存するので読み取り専用。
+  # クラウド・サーバ・ネットワーク機器の操作権限は持たせない。
+  infra_engineer:
+    permissions:
+      - code.read
 
   judge:
     permissions:

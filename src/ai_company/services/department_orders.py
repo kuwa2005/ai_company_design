@@ -18,6 +18,10 @@ Boundaries (same as the rest of the meeting):
   It is not part of the code validation gate; the closure loops
   (sales / compliance / product_fit / it_ops audits) check it afterwards.
 - Results of ``department_work`` never create child tasks (no chained growth).
+- Orders listed in ``meeting_resolutions.design_waits_for`` (既定: 商品企画の
+  非目標・法務事前点検) gate the project's not-yet-started root implementation
+  tasks (``gate_design_on``), and their results reach implementation prompts as
+  DATA, so 開発部 starts from what マーケ／法務 decided instead of in parallel.
 """
 
 from __future__ import annotations
@@ -148,6 +152,24 @@ ORDER_TEMPLATES: tuple[OrderTemplate, ...] = (
         ),
         acceptance_criteria="論点一覧と、専門家・担当部署に確認すべき事項が分かれている",
         priority=80,
+    ),
+    OrderTemplate(
+        key="operations.infra",
+        department_id="operations",
+        section_id="infrastructure",
+        role_required="infra_engineer",
+        title="本番環境・監視・バックアップ・障害対応の計画",
+        objective=(
+            "本番環境の構成案（ホスティング・ネットワーク・TLS・秘密情報の置き場）、"
+            "監視とアラート、バックアップと復旧手順（RPO/RTO の案）、"
+            "障害時の連絡と一次対応の流れをまとめよ。"
+            "費用・契約・本番環境の作成は社長判断事項として残すこと。"
+        ),
+        acceptance_criteria=(
+            "構成案・監視項目・バックアップと復旧手順・障害対応フローと、社長判断事項がある"
+        ),
+        priority=65,
+        depends_on_plan_titles=_DESIGN_TITLES,
     ),
     OrderTemplate(
         key="operations.premise",
@@ -372,6 +394,10 @@ def issue_work_orders(
         session.flush()
         key_to_task[order.key] = task
         result.issued.append(task)
+        if order.key in cfg.settings.meeting_resolutions.design_waits_for and not depends:
+            gate_design_on(
+                session, project_id=project_id, gate_task=task, reason=order.key, config=cfg
+            )
         record_audit(
             session,
             event_type="meeting_work_order_issued",
@@ -405,6 +431,132 @@ def issue_work_orders(
             },
         )
     return result
+
+
+_GATEABLE = ("READY", "WAITING")
+
+
+def gate_design_on(
+    session: Session,
+    *,
+    project_id: str,
+    gate_task: Task,
+    reason: str,
+    config: AppConfig | None = None,
+) -> list[str]:
+    """Make the project's not-yet-started *root* implementation tasks wait for ``gate_task``.
+
+    Root = an implementation task that depends on no other implementation task
+    (e.g. 「Goal分解とスコープ定義」). Tasks that already ran are left alone. A
+    gate that ends CANCELLED (部長所見の失敗など) counts as satisfied (see
+    ``tasks.dependencies_satisfied``), so a failed department never deadlocks 開発部.
+    Returns the gated task ids.
+    """
+    from sqlalchemy import func
+
+    from ai_company.db.models import Execution, Task, TaskDependency
+    from ai_company.services.audit import record_audit
+    from ai_company.services.tasks import refresh_task_readiness
+
+    impl = TaskKind.IMPLEMENTATION.value
+    candidates = session.scalars(
+        select(Task).where(
+            Task.project_id == project_id,
+            Task.kind == impl,
+            Task.status.in_(_GATEABLE),
+            Task.id != gate_task.id,
+        )
+    ).all()
+    gated: list[str] = []
+    for cand in candidates:
+        dep_ids = list(
+            session.scalars(
+                select(TaskDependency.depends_on_task_id).where(TaskDependency.task_id == cand.id)
+            ).all()
+        )
+        if gate_task.id in dep_ids:
+            continue
+        if dep_ids and session.scalar(
+            select(func.count()).select_from(Task).where(Task.id.in_(dep_ids), Task.kind == impl)
+        ):
+            continue  # not a root: it already waits for design work
+        if session.scalar(
+            select(func.count()).select_from(Execution).where(Execution.task_id == cand.id)
+        ):
+            continue  # already started once
+        session.add(TaskDependency(task_id=cand.id, depends_on_task_id=gate_task.id))
+        session.flush()
+        refresh_task_readiness(session, cand.id)
+        gated.append(cand.id)
+    if gated:
+        record_audit(
+            session,
+            event_type="design_waits_for_department_work",
+            actor_type="secretary",
+            actor_id="secretary",
+            target_type="task",
+            target_id=gate_task.id,
+            metadata={"reason": reason, "gated": gated, "project_id": project_id},
+        )
+    return gated
+
+
+def release_stuck_design_gates(
+    session: Session, *, project_id: str, config: AppConfig | None = None
+) -> list[str]:
+    """A gate whose role can never be dispatched must not hold 開発部 forever.
+
+    Runs every scheduler cycle. For each waiting implementation task gated by a
+    ``head_brief`` / ``department_work`` that is READY but denied by policy (e.g.
+    the head's permission profile was removed): a head brief falls back to its
+    template orders (``close_failed_head_brief``); a department order's gate edge
+    is dropped. Returns the released gate task ids.
+    """
+    from ai_company.db.models import Task, TaskDependency
+    from ai_company.enums import TaskStatus
+    from ai_company.services.audit import record_audit
+    from ai_company.services.policy_engine import evaluate_dispatch
+    from ai_company.services.tasks import refresh_task_readiness
+
+    cfg = config or load_config()
+    gate_kinds = (WORK_ORDER_KIND, TaskKind.HEAD_BRIEF.value)
+    edges = session.execute(
+        select(TaskDependency, Task)
+        .join(Task, Task.id == TaskDependency.depends_on_task_id)
+        .where(Task.project_id == project_id, Task.kind.in_(gate_kinds))
+    ).all()
+    released: list[str] = []
+    for edge, gate in edges:
+        waiter = session.get(Task, edge.task_id)
+        if waiter is None or waiter.kind != TaskKind.IMPLEMENTATION.value:
+            continue
+        if waiter.status != TaskStatus.WAITING or gate.status != TaskStatus.READY:
+            continue
+        decision = evaluate_dispatch(task=gate, role=gate.role_required or "", config=cfg)
+        if decision.allowed:
+            continue
+        if gate.kind == TaskKind.HEAD_BRIEF.value:
+            from ai_company.services.head_briefs import close_failed_head_brief
+
+            close_failed_head_brief(
+                session, task=gate, reason=f"design_gate_policy_denied:{decision.reason}",
+                config=cfg,
+            )
+        else:
+            session.delete(edge)
+            session.flush()
+            refresh_task_readiness(session, waiter.id)
+        released.append(gate.id)
+        record_audit(
+            session,
+            event_type="design_gate_released",
+            actor_type="secretary",
+            actor_id="secretary",
+            target_type="task",
+            target_id=gate.id,
+            metadata={"waiter": waiter.id, "reason": decision.reason},
+        )
+    return released
 
 
 def record_department_work_result(task: Task, payload: dict[str, Any]) -> None:

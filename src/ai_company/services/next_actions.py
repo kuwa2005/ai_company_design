@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ai_company.db.models import Project, Task
-from ai_company.enums import TaskStatus
+from ai_company.enums import ProjectStatus, TaskStatus
 from ai_company.services.delivery_state import (
     _explain_block_reason,
     _policy_denied_ready,
@@ -93,6 +93,10 @@ def human_next_actions(
         "scheduler_pause": "スケジューラが1サイクル終了しました（ここは正常な一区切りです）。",
         "closure_running": "実装キューは空ですが、Goal完了前の自問ループが実行中です。",
         "release_ready": "自問まで完了し、リリース候補の状態です。",
+        "awaiting_decision": (
+            "作業と自問はすべて終わりました。会議の「社長への確認事項」が未回答のため、"
+            "リリース可にしていません。"
+        ),
         "budget_wait": (
             "予算待ち（時間枠の上限）のため停止しました。"
             "同じ時間枠の中で再試行しても進まないため、空回りせずに止めています。"
@@ -111,6 +115,8 @@ def human_next_actions(
             stopped_reason = "closure_running"
         elif phase == "release_ready" and not stopped_reason:
             stopped_reason = "release_ready"
+        elif phase == "awaiting_decision" and stopped_reason in (None, "idle_incomplete"):
+            stopped_reason = "awaiting_decision"
     # 自問ループ中（closure_running）でも、READY が時間枠の上限で止まっていれば
     # 「待てば進む」は誤りなので予算待ちを優先して案内する（R-1）。
     if (
@@ -156,11 +162,11 @@ def human_next_actions(
                 if last:
                     lines.append(f"  原因: {_explain_block_reason(last.reason)}")
                     lines.append(
-                        "  状態: 承認キュー空 → 実装マネージャーへ移管可"
+                        "  状態: 承認キュー空 → 直属の上司（課長・部長）へ移管可"
                     )
                 else:
                     lines.append(
-                        "  原因: 停止中（承認なし）。実装マネージャーへ移管可"
+                        "  原因: 停止中（承認なし）。直属の上司（課長・部長）へ移管可"
                     )
     if deferred:
         lines.append("")
@@ -224,7 +230,7 @@ def human_next_actions(
         lines.append("")
         lines.append("いまやることは、次のいずれかです。")
         lines.append("")
-        lines.append("A) 直近上司（実装マネージャー）に戻して直させる:")
+        lines.append("A) 直属の上司（課長・部長）に戻して直させる:")
         lines.append(f"   {continue_cmd}")
         for t in blocked:
             lines.append(f"   ai-company task handoff-manager {t.id}")
@@ -316,6 +322,43 @@ def human_next_actions(
         lines.append("実行待ちはありません。依存待ちだけが残っています。")
         lines.append("前段タスクの完了／検証を待つか、status で詰まりを確認してください。")
         lines.append("   ai-company status")
+        return "\n".join(lines)
+
+    if stopped_reason == "awaiting_decision":
+        from ai_company.services.meeting_questions import decisions_pending
+
+        if project_id:
+            pids = [project_id]
+        else:
+            pids = list(
+                session.scalars(
+                    select(Project.id)
+                    .where(Project.status == ProjectStatus.ACTIVE)
+                    .order_by(Project.created_at.asc())
+                ).all()
+            )
+        lines.append("社長の回答が必要です（回答するまでリリース可になりません）:")
+        multi = len(pids) > 1
+        for pid in pids:
+            pend = decisions_pending(session, pid)
+            if not pend:
+                continue
+            if multi:
+                lines.append(f"  案件 {pid}:")
+            for n, q in pend[:10]:
+                lines.append(f"   #{n} {q}")
+        lines.append("")
+        lines.append(
+            '   ai-company decide <番号> "回答"'
+            + ("  --project <案件id>" if multi else "")
+        )
+        lines.append("")
+        lines.append("回答した部の文書は必要に応じて改訂されます。回答後に続きを実行:")
+        lines.append(f"   {continue_cmd}")
+        lines.append(
+            "（確認事項を待たずに完了させる運用にするなら config/settings.yaml の "
+            "executive_meeting.require_decisions_before_release: false）"
+        )
         return "\n".join(lines)
 
     if stopped_reason == "all_implementation_done":

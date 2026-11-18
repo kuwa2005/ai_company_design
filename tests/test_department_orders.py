@@ -26,6 +26,7 @@ from ai_company.services.executive_meeting import (
 from ai_company.services.policy_engine import infer_dispatch_action, role_allows_writes
 from ai_company.services.secretary import TaskProposal, start_goal, understand_goal
 from tests.conftest import (
+    answer_meeting_questions,
     write_budget_override,
     write_settings_override,
     write_validation_override,
@@ -74,7 +75,15 @@ def test_only_summoned_departments_get_orders(tmp_env: Path) -> None:
 
     minutes = convene_executive_meeting(understand_goal(SAAS_GOAL))
     keys = [o.key for o in minutes.work_orders]
-    assert keys == ["sales.proposal", "sales.onboarding", "marketing.value", "legal.precheck"]
+    # 社外販売 → 法務・マーケ・運用保守も同時招集（運用保守部はインフラ課を含む 2 件）
+    assert keys == [
+        "sales.proposal",
+        "sales.onboarding",
+        "marketing.value",
+        "legal.precheck",
+        "operations.infra",
+        "operations.premise",
+    ]
     for o in minutes.work_orders:
         assert o.department_id in minutes.attendees
         assert validate_work_order(o) == []
@@ -83,6 +92,7 @@ def test_only_summoned_departments_get_orders(tmp_env: Path) -> None:
 def test_caps_are_deterministic_and_deferred_are_recorded(tmp_env: Path) -> None:
     plan = understand_goal(SAAS_GOAL)
     every = ["sales", "marketing", "legal", "operations"]
+    write_settings_override(tmp_env, meeting_resolutions={"max_orders_per_meeting": 4})
     orders, deferred = derive_work_orders(plan.goal, every, plan.tasks)
     # max_orders_per_meeting = 4 (DEPARTMENTS order → template order)
     assert [o.key for o in orders] == [
@@ -92,7 +102,8 @@ def test_caps_are_deterministic_and_deferred_are_recorded(tmp_env: Path) -> None
         "legal.precheck",
     ]
     assert [(d.order.key, "1会議" in d.reason) for d in deferred] == [
-        ("operations.premise", True)
+        ("operations.infra", True),
+        ("operations.premise", True),
     ]
     again = derive_work_orders(plan.goal, every, plan.tasks)
     assert [o.key for o in again[0]] == [o.key for o in orders]
@@ -104,7 +115,8 @@ def test_caps_are_deterministic_and_deferred_are_recorded(tmp_env: Path) -> None
     orders, deferred = derive_work_orders(plan.goal, every, plan.tasks)
     assert "sales.onboarding" not in [o.key for o in orders]
     assert any(d.order.key == "sales.onboarding" and "1部" in d.reason for d in deferred)
-    assert "operations.premise" in [o.key for o in orders]
+    assert "operations.infra" in [o.key for o in orders]
+    assert any(d.order.key == "operations.premise" and "1部" in d.reason for d in deferred)
 
 
 def test_priority_ceiling_whitelist_and_disable(tmp_env: Path) -> None:
@@ -152,6 +164,7 @@ def test_validate_work_order_rejects_cross_department() -> None:
 
 
 def test_minutes_show_orders_and_deferred(tmp_env: Path) -> None:
+    write_settings_override(tmp_env, meeting_resolutions={"max_orders_per_meeting": 4})
     minutes = convene_executive_meeting(understand_goal(SAAS_GOAL), all_departments=True)
     md = render_minutes_markdown(minutes)
     assert "## 決定事項：部門別追加タスク" in md
@@ -173,13 +186,27 @@ def test_start_goal_issues_orders_with_units_and_is_idempotent(
         "sales.onboarding",
         "marketing.value",
         "legal.precheck",
+        "operations.infra",
+        "operations.premise",
     ]
     assert [t.id for t in result.work_order_tasks] == [t.id for t in tasks]
+    infra = next(t for t in tasks if _key(t) == "operations.infra")
+    assert (infra.department_id, infra.section_id) == ("operations", "infrastructure")
+    assert infra.role_required == "infra_engineer"
     by_key = {_key(t): t for t in tasks}
     legal = by_key["legal.precheck"]
     assert (legal.department_id, legal.section_id) == ("legal", "compliance")
     assert legal.role_required == "compliance_auditor"
-    assert legal.status == TaskStatus.READY  # runs in parallel with design
+    assert legal.status == TaskStatus.READY
+    # 開発部の最初の設計は、商品企画の非目標と法務事前点検を待つ（design_waits_for）
+    root = result.tasks[0]
+    assert root.status == TaskStatus.WAITING
+    gate_ids = set(
+        db_session.scalars(
+            select(TaskDependency.depends_on_task_id).where(TaskDependency.task_id == root.id)
+        ).all()
+    )
+    assert gate_ids == {by_key["marketing.value"].id, legal.id}
     assert all(t.priority <= 80 for t in tasks)
     # constraints carry the idempotency key and the meeting tag
     assert json.loads(legal.constraints)["meeting"] == f"{pid}_kickoff"
@@ -202,15 +229,16 @@ def test_start_goal_issues_orders_with_units_and_is_idempotent(
     )
     assert again.issued == []
     assert {d.reason for d in again.skipped} == {"起票済み（冪等）"}
-    assert len(_order_tasks(db_session, pid)) == 4
+    assert len(_order_tasks(db_session, pid)) == 6
 
     issued_events = db_session.scalars(
         select(AuditEvent).where(AuditEvent.event_type == "meeting_work_order_issued")
     ).all()
-    assert len(issued_events) == 4
+    assert len(issued_events) == 6
 
 
 def test_deferred_orders_are_audited(db_session: Session, tmp_env: Path) -> None:
+    write_settings_override(tmp_env, meeting_resolutions={"max_orders_per_meeting": 4})
     result = start_goal(db_session, SAAS_GOAL, all_departments=True)
     keys = [_key(t) for t in _order_tasks(db_session, result.project.id)]
     assert "operations.premise" not in keys
@@ -282,6 +310,7 @@ def test_autonomous_mock_completes_with_work_orders(
     )
     clear_config_cache()
     result = start_goal(db_session, SAAS_GOAL)
+    answer_meeting_questions(db_session, result.project.id)
     auto = run_autonomous(
         db_session,
         project_id=result.project.id,
@@ -294,7 +323,7 @@ def test_autonomous_mock_completes_with_work_orders(
     db_session.refresh(result.project)
     assert result.project.status == ProjectStatus.DONE
     orders = _order_tasks(db_session, result.project.id)
-    assert len(orders) == 4
+    assert len(orders) == 6
     assert all(t.status == TaskStatus.DONE for t in orders)
     # the first closure task is created only after every work order finished.
     # Judged by audit-event *insertion order* (SQLite rowid), not created_at:

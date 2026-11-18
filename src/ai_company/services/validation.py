@@ -98,7 +98,7 @@ def _phase_gate_for_task(session: Session, parent: Task, config: AppConfig) -> s
 
     project = session.get(Project, parent.project_id)
     phase = project_delivery_phase(session, project)
-    if phase in {"release_ready", "impl_done_closure_pending"}:
+    if phase in {"release_ready", "awaiting_decision", "impl_done_closure_pending"}:
         return "release"
     if phase in {"implementing", "impl_queue_empty_closure_running"}:
         return "implementing"

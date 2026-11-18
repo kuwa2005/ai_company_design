@@ -159,9 +159,19 @@ def dependencies_satisfied(session: Session, task_id: str) -> bool:
         return True
     for dep in deps:
         parent = session.get(Task, dep.depends_on_task_id)
-        if parent is None or parent.status != TaskStatus.DONE:
+        if parent is None:
             return False
+        if parent.status == TaskStatus.DONE:
+            continue
+        # A cancelled document task (部門作業・部長所見・招集見直し) never blocks the
+        # work that only waited to read it (gate_design_on).
+        if parent.status == TaskStatus.CANCELLED and str(parent.kind) in _SOFT_GATE_KINDS:
+            continue
+        return False
     return True
+
+
+_SOFT_GATE_KINDS = frozenset({"department_work", "head_brief", "attendance_review"})
 
 
 def refresh_task_readiness(session: Session, task_id: str) -> Task:

@@ -7,6 +7,7 @@ import json
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ai_company.config import AppConfig, load_config
 from ai_company.db.models import Task
 from ai_company.services.audit import record_audit
 from ai_company.services.redact import single_line
@@ -116,6 +117,16 @@ def numbered_meeting_questions(
 def meeting_open_questions(session: Session, project_id: str, *, limit: int = 10) -> list[str]:
     """未解決の確認事項（表示用・伏せ字化済み）."""
     return [q for _, q in numbered_meeting_questions(session, project_id)][:limit]
+
+
+def decisions_pending(
+    session: Session, project_id: str, *, config: AppConfig | None = None
+) -> list[tuple[int, str]]:
+    """Open questions that hold the release (empty when the gate is off)."""
+    cfg = config or load_config()
+    if not cfg.settings.executive_meeting.require_decisions_before_release:
+        return []
+    return numbered_meeting_questions(session, project_id)
 
 
 def resolve_meeting_question(

@@ -19,7 +19,7 @@ from ai_company.services.secretary import (
     scheduler_continue_command,
     start_goal,
 )
-from tests.conftest import write_budget_override
+from tests.conftest import disable_decision_gate, write_budget_override
 
 INTERNAL = "社内向けの勤怠Webアプリを作る"
 SAAS = "顧客向けの勤怠管理Webサービスを作って販売したい"
@@ -64,6 +64,7 @@ def test_continue_without_project_completes_finished_projects(
 ) -> None:
     """Resume from 予算待ち exactly as the old guidance said (no --project)."""
     _caps(tmp_env, 3)
+    disable_decision_gate(tmp_env)
     result = start_goal(db_session, INTERNAL)
     pid = result.project.id
     auto = run_autonomous(db_session, project_id=pid, max_cycles=300, runner="mock")
@@ -89,6 +90,7 @@ def test_decide_after_done_reopens_project_and_rereleases(
     db_session: Session, tmp_env: Path
 ) -> None:
     _caps(tmp_env, 10000)
+    disable_decision_gate(tmp_env)
     result = start_goal(db_session, SAAS)
     pid = result.project.id
     first = run_autonomous(db_session, project_id=pid, max_cycles=300, runner="mock")
@@ -138,6 +140,7 @@ def test_cli_decide_prints_reopen_and_resume_command(db_session: Session, tmp_en
     from ai_company.cli import app
 
     _caps(tmp_env, 10000)
+    disable_decision_gate(tmp_env)
     result = start_goal(db_session, SAAS)
     pid = result.project.id
     run_autonomous(db_session, project_id=pid, max_cycles=300, runner="mock")
