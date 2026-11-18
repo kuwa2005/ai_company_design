@@ -90,3 +90,88 @@ def test_meeting_goal_block_hides_japanese_secrets() -> None:
     assert "hunter2" not in block
     assert "hunter3" not in block
     assert "勤怠Webを作る" in block
+
+
+# --- 既知のトークン形式・メールアドレス・電話番号 ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "secret"),
+    [
+        ("key sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv", "AbCdEfGhIjKlMnOpQrStUv"),
+        ("aws AKIAIOSFODNN7EXAMPLE で接続", "AKIAIOSFODNN7EXAMPLE"),
+        ("ghp_" + "a1B2" * 9, "a1B2" * 9),
+        ("github_pat_11ABCDEFG0123456789_abcdefXYZ", "11ABCDEFG0123456789_abcdefXYZ"),
+        ("xoxb-1234567890-abcdefghij", "1234567890-abcdefghij"),
+        ("AIza" + "B" * 35, "B" * 35),
+        (
+            "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N",
+            "dozjgNryP4J3jVmNHl0w5N",
+        ),
+        ("連絡先 taro.yamada@customer-corp.co.jp まで", "taro.yamada"),
+        ("担当: 03-1234-5678", "1234-5678"),
+        ("携帯 090-1234-5678", "1234-5678"),
+        ("携帯 09012345678", "09012345678"),
+        ("+81-90-1234-5678", "1234-5678"),
+    ],
+)
+def test_token_formats_and_personal_data_are_redacted(raw: str, secret: str) -> None:
+    out = redact_text(raw)
+    assert secret not in out, out
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "user@example.com でログインできること",
+        "git@github.com:org/repo.git を clone",
+        "リリース日 2026-11-18、版 1.2.3",
+        "ポート 8080-8090 を開放しない",
+        "Python 3.12 / ID 1234567890",
+    ],
+)
+def test_docs_examples_dates_and_versions_stay(text: str) -> None:
+    assert redact_text(text) == text
+
+
+# --- 伏せ字語リスト ----------------------------------------------------------
+
+
+def test_registered_terms_are_replaced(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from ai_company.services.redact import clear_redact_terms_cache, parse_redact_terms
+
+    terms = tmp_path / "redact_terms.txt"
+    terms.write_text(
+        "# 顧客名・案件名\n"
+        "株式会社みなと商事 => 顧客A社\n"
+        "みなと\n"
+        "Project Falcon => 案件F\n"
+        "x\n",  # 1文字は無視
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_COMPANY_REDACT_TERMS", str(terms))
+    clear_redact_terms_cache()
+    out = redact_text("株式会社みなと商事の勤怠。みなと支店と project falcon で使う。x軸")
+    assert "みなと" not in out
+    assert "顧客A社の勤怠" in out
+    assert "[伏せ字]支店" in out
+    assert "案件F" in out and "falcon" not in out.lower()
+    assert "x軸" in out
+    # also applied to structured output and to the minutes' goal block
+    assert redact_obj({"goal": ["みなと"]}) == {"goal": ["[伏せ字]"]}
+    assert "みなと" not in "\n".join(quote_goal_block("みなと向け"))
+    # an alias that contains another registered term is not trusted
+    assert parse_redact_terms("ACME => ACME社\n") == {"ACME": "[伏せ字]"}
+    # edits to the file are picked up (cache keyed by mtime/size)
+    terms.write_text("ほくと\n", encoding="utf-8")
+    clear_redact_terms_cache()
+    assert redact_text("みなと と ほくと") == "みなと と [伏せ字]"
+    clear_redact_terms_cache()
+
+
+def test_missing_terms_file_is_a_noop(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from ai_company.services.redact import clear_redact_terms_cache
+
+    monkeypatch.setenv("AI_COMPANY_REDACT_TERMS", str(tmp_path / "none.txt"))
+    clear_redact_terms_cache()
+    assert redact_text("株式会社みなと商事") == "株式会社みなと商事"

@@ -425,6 +425,32 @@ def meeting_cmd(
     console.print(render_minutes_markdown(minutes), markup=False)
 
 
+@app.command("redact")
+def redact_cmd(
+    text: str = typer.Argument(..., help="伏せ字化を試す文（依頼文など）。どこにも送信しない"),
+) -> None:
+    """Preview how a goal is redacted before it reaches prompts / minutes (local only)."""
+    from ai_company.services.redact import (
+        clear_redact_terms_cache,
+        parse_redact_terms,
+        redact_terms_path,
+        redact_text,
+    )
+
+    path = redact_terms_path()
+    clear_redact_terms_cache()
+    if path.exists():
+        n = len(parse_redact_terms(path.read_text(encoding="utf-8")))
+        console.print(f"伏せ字語リスト: {path}（{n}語）", markup=False)
+    else:
+        console.print(
+            f"伏せ字語リスト: {path}（未作成）— 顧客名・個人名・案件名を1行1語で登録できます"
+            "（「語 => 置き換え名」も可）",
+            markup=False,
+        )
+    console.print(single_line(redact_text(text)), markup=False)
+
+
 @app.command("decide")
 def decide_cmd(
     number: int = typer.Argument(..., help="status に出る会議の確認事項の番号（#n）"),
