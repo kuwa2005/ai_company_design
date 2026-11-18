@@ -16,7 +16,7 @@ from ai_company.services.autonomous import (
 )
 from ai_company.services.secretary import start_goal
 from ai_company.services.tasks import create_project
-from tests.test_t3s5_resume_fixes import INTERNAL, SAAS, _caps
+from tests.test_resume_guidance import INTERNAL, SAAS, _caps
 
 
 def _finish(session: Session, goal: str) -> str:

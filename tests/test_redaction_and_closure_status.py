@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy.orm import Session
 
-from ai_company.services import secretary
+from ai_company.services import next_actions
 from ai_company.services.redact import redact_text
 from ai_company.services.result_parser import (
     parse_judge_result,
@@ -98,7 +98,7 @@ def test_status_shows_budget_wait_during_closure_loop(
     _spend(db_session, at=datetime.now(UTC).replace(tzinfo=None))
     # 自問ループ中（READY の自問タスクが時間枠の上限で起動できない状態）
     monkeypatch.setattr(
-        secretary, "project_delivery_phase", lambda *_a, **_k: "impl_queue_empty_closure_running"
+        next_actions, "project_delivery_phase", lambda *_a, **_k: "impl_queue_empty_closure_running"
     )
     text = human_next_actions(db_session, project_id=pid, runner="mock")
     assert "予算待ち" in text
@@ -112,7 +112,7 @@ def test_status_keeps_closure_running_below_cap(
     pid = start_goal(db_session, "社内向けの勤怠Webアプリを作る", hold_meeting=False).project.id
     _caps(tmp_env, hourly_runs=1000)
     monkeypatch.setattr(
-        secretary, "project_delivery_phase", lambda *_a, **_k: "impl_queue_empty_closure_running"
+        next_actions, "project_delivery_phase", lambda *_a, **_k: "impl_queue_empty_closure_running"
     )
     text = human_next_actions(db_session, project_id=pid, runner="mock")
     assert "自問ループが実行中です" in text

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from ai_company.db.models import AuditEvent, Execution, Task
 from ai_company.enums import TaskKind, TaskStatus
+from ai_company.services import worker_cursor as worker_cursor_mod
 from ai_company.services import workers as workers_mod
 from ai_company.services.autonomous import POLICY_DEADLOCK_CYCLES, continue_until_gate
 from ai_company.services.cursor_runner import RunnerCapture
@@ -114,7 +115,7 @@ def test_cursor_closure_gaps_spawns_tasks(
             exit_code=0, stdout=out, stderr="", timed_out=False, command=["agent"]
         )
 
-    monkeypatch.setattr(workers_mod, "run_cursor_cli", fake_cli)
+    monkeypatch.setattr(worker_cursor_mod, "run_cursor_cli", fake_cli)
     sched = run_once(db_session, runner="cursor", max_to_start=1)
     assert sched.started == 1
     db_session.refresh(audit)

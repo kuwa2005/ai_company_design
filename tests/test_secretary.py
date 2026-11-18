@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -23,8 +24,20 @@ FORBIDDEN_IMPORTS = {
 }
 
 
-def test_secretary_module_has_no_spawn_imports() -> None:
-    path = Path(secretary_mod.__file__).resolve()
+# secretary.py was split; the ban covers every module that makes up the secretary.
+SECRETARY_MODULES = (
+    "secretary",
+    "goal_planning",
+    "delivery_state",
+    "meeting_questions",
+    "status_report",
+    "next_actions",
+)
+
+
+@pytest.mark.parametrize("module", SECRETARY_MODULES)
+def test_secretary_module_has_no_spawn_imports(module: str) -> None:
+    path = Path(secretary_mod.__file__).resolve().parent / f"{module}.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
     imported: set[str] = set()
     for node in ast.walk(tree):
