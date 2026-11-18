@@ -341,10 +341,19 @@ def maybe_spawn_closure_loop(
         return None
     if _open_closure_tasks(session, project_id):
         return None
+    from ai_company.services.attendance_review import (
+        open_attendance_reviews,
+        settle_stalled_attendance_reviews,
+    )
     from ai_company.services.head_briefs import open_head_briefs, settle_stalled_head_briefs
 
+    # 停止した招集見直しはキーワード判定のまま閉じる（リリースを止めない）
+    settle_stalled_attendance_reviews(session, project_id=project_id, config=cfg)
     # 停止した部長所見はテンプレートへ戻して閉じる（リリースを止めない）
     settle_stalled_head_briefs(session, project_id=project_id, config=cfg)
+    if open_attendance_reviews(session, project_id):
+        # 招集見直しが終わらないと、追加招集した部の作業が起票されない
+        return None
     if open_head_briefs(session, project_id):
         # 部長所見がまだ出ていない: その部の部門作業が起票される前に監査しない
         return None

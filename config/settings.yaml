@@ -78,3 +78,14 @@ executive_meeting:
     max_retries: 1
     fallback: template        # template | none
     max_wait_cycles: 3        # 実装完了後、未着手の所見に与える配車の機会（回）。超えたらテンプレートへ戻す。0 = すぐ戻す
+  # 招集見直し（kind=attendance_review, 読み取り専用）。キーワード判定の出席者を下限として、
+  # 秘書室／推進課の短命 Worker が「依頼文から見て必要な部」を追加招集する（外すことはできない）。
+  # 追加された部には会議テンプレートの部門作業（部長所見が有効な部は部長所見）を起票する。
+  # 失敗・解析不能・リトライ上限ではキーワード判定のまま進む。
+  attendance_review:
+    enabled: true
+    role: project_coordinator   # 既存の読み取り専用プロファイル（code.read）を使う
+    max_additions: 2            # 1会議あたり追加招集できる部の上限
+    estimated_cost: 0.05
+    max_retries: 1
+    max_wait_cycles: 3

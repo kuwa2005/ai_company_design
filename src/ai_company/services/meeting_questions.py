@@ -19,7 +19,8 @@ def _all_meeting_questions(session: Session, project_id: str) -> list[str]:
     1-based position is the number used by ``ai-company decide``.
 
     Sources: the latest ``executive_meeting_held`` audit event of the project
-    (template minutes) and applied ``head_brief`` tasks (``head_open_questions``).
+    (template minutes), applied ``head_brief`` tasks (``head_open_questions``) and
+    departments added by the attendance review (``added_open_questions``).
     """
     from ai_company.db.models import AuditEvent
     from ai_company.org import DEPARTMENTS
@@ -64,6 +65,11 @@ def _all_meeting_questions(session: Session, project_id: str) -> list[str]:
                 else "専門家／担当部署"
             )
             found.append(f"{dept}（{who}）: {text.strip()}")
+
+    # 招集見直しで追加した部の確認事項（既存の番号がずれないよう最後に足す）
+    from ai_company.services.attendance_review import attendance_open_questions
+
+    found.extend(attendance_open_questions(session, project_id))
 
     out: list[str] = []
     for q in found:

@@ -58,6 +58,8 @@ _READ_ONLY_KINDS = frozenset(
         "department_work",
         # 部長所見: 判断（JSON）のみ。リポジトリは変更しない
         "head_brief",
+        # 招集見直し: 判断（JSON）のみ
+        "attendance_review",
     }
 )
 
@@ -129,6 +131,7 @@ def infer_dispatch_action(task: Task) -> str:
         "maintenance_audit",
         "department_work",
         "head_brief",
+        "attendance_review",
     } or kind.endswith("_audit"):
         return "code.read"
     return "code.edit"

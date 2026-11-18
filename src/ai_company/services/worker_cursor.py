@@ -144,6 +144,8 @@ def run_cursor_worker(
         parse_kind = "supervisor"
     elif task.kind in {TaskKind.HEAD_BRIEF, "head_brief"}:
         parse_kind = "head"
+    elif task.kind in {TaskKind.ATTENDANCE_REVIEW, "attendance_review"}:
+        parse_kind = "attendance"
     elif _is_closure(task):
         parse_kind = "closure"
     else:

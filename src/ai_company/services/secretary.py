@@ -134,6 +134,7 @@ class StartResult:
     head_brief_tasks: list[Task] = field(default_factory=list)
     # 部長所見を起票しなかった部 → 理由（権限プロファイル無し・人数上限など）
     head_brief_skipped: dict[str, str] = field(default_factory=dict)
+    attendance_review_task: Task | None = None
 
 
 
@@ -296,6 +297,13 @@ def start_goal(
         session, minutes, project_id=result.project.id
     )
     orders_now = list(minutes.work_orders)
+    if cfg.settings.executive_meeting.attendance_review.enabled:
+        # キーワード判定の出席者を下限に、欠席した部の追加招集を推進課に判断させる。
+        from ai_company.services.attendance_review import issue_attendance_review
+
+        result.attendance_review_task = issue_attendance_review(
+            session, project_id=result.project.id, minutes=minutes, config=cfg
+        )
     if cfg.settings.executive_meeting.head_llm.enabled:
         # 任意機能: 対象部の部長に所見を求め、その部のテンプレート指示は保留する。
         # 部長 Worker の起動は Scheduler 経由（秘書は起動しない）。

@@ -227,6 +227,12 @@ def start_cmd(
             from ai_company.services.executive_meeting import minutes_brief
 
             console.print(minutes_brief(result.meeting), markup=False)
+        if result.attendance_review_task is not None:
+            console.print(
+                "招集見直し: 1件 — 推進課 Worker が欠席した部の追加招集を判断"
+                "（追加のみ。結果は議事録の _kickoff_attendance.md）",
+                markup=False,
+            )
         if result.head_brief_tasks:
             depts = "、".join(str(t.department_id) for t in result.head_brief_tasks)
             console.print(

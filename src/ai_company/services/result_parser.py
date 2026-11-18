@@ -507,7 +507,71 @@ def parse_head_brief_result(stdout: str) -> ParsedResult:
     return ParsedResult(ok=True, result=normalized, error=None)
 
 
-RoleParseKind = Literal["coding", "reviewer", "judge", "supervisor", "head", "closure"]
+# --- AttendanceReview (招集見直し) --------------------------------------------
+
+ATTENDANCE_REVIEW_LIMITS = {"summon": 4, "reason": 200, "summary": 400}
+
+
+def parse_attendance_review_result(stdout: str) -> ParsedResult:
+    """Parse the secretariat's attendance review. Fail closed on shape errors.
+
+    Unknown department ids are dropped (never echoed into minutes). Whether a
+    department may be added at all (absent at the meeting, cap) is checked by
+    ``attendance_review.apply_attendance_review``.
+    """
+    lim = ATTENDANCE_REVIEW_LIMITS
+    data = _try_load(stdout)
+    if data is None:
+        return ParsedResult(ok=False, result=None, error="unparseable_or_missing_json")
+    for key in ("status", "summon", "confidence"):
+        if key not in data:
+            return ParsedResult(ok=False, result=data, error=f"missing_field:{key}")
+    status = str(data.get("status") or "").lower()
+    if status != "completed":
+        return ParsedResult(ok=False, result=data, error=f"invalid_status:{_err_val(status)}")
+    conf_raw = data.get("confidence")
+    if isinstance(conf_raw, bool) or not isinstance(conf_raw, (int, float)):
+        return ParsedResult(ok=False, result=data, error="invalid_confidence")
+    if not 0.0 <= float(conf_raw) <= 1.0:
+        return ParsedResult(ok=False, result=data, error="confidence_out_of_range")
+    raw = data.get("summon")
+    if not isinstance(raw, list):
+        return ParsedResult(ok=False, result=data, error="invalid_summon")
+    known = _known_department_ids()
+    notes: list[str] = []
+    summon: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("department_id"), str)
+            or not isinstance(item.get("reason"), str)
+        ):
+            return ParsedResult(ok=False, result=data, error="invalid_summon_item")
+        dept_id = item["department_id"].strip()
+        if dept_id not in known:
+            notes.append("summon_unknown_department_dropped")
+            continue
+        if dept_id in seen:
+            continue
+        seen.add(dept_id)
+        summon.append({"department_id": dept_id, "reason": item["reason"][: lim["reason"]]})
+    if len(summon) > lim["summon"]:
+        notes.append("summon_truncated")
+        summon = summon[: lim["summon"]]
+    normalized: dict[str, Any] = {
+        "status": status,
+        "summon": summon,
+        "summary": str(data.get("summary") or "")[: lim["summary"]],
+        "confidence": float(conf_raw),
+        "notes": notes,
+    }
+    return ParsedResult(ok=True, result=normalized, error=None)
+
+
+RoleParseKind = Literal[
+    "coding", "reviewer", "judge", "supervisor", "head", "attendance", "closure"
+]
 
 _CLOSURE_VERDICTS = frozenset({"CLEAR", "GAPS"})
 _MAX_CLOSURE_PROPOSALS = 20
@@ -570,6 +634,8 @@ def parse_closure_result(stdout: str) -> ParsedResult:
 def parse_for_kind(stdout: str, kind: RoleParseKind) -> ParsedResult:
     if kind == "head":
         return parse_head_brief_result(stdout)
+    if kind == "attendance":
+        return parse_attendance_review_result(stdout)
     if kind == "supervisor":
         return parse_supervisor_result(stdout)
     if kind == "reviewer":

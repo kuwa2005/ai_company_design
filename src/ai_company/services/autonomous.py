@@ -157,11 +157,11 @@ def _project_complete(session: Session, project_id: str) -> bool:
     return closure_loops_finished(session, project_id)
 
 
-_DOCUMENT_WORK_KINDS = ("department_work", "head_brief")
+_DOCUMENT_WORK_KINDS = ("department_work", "head_brief", "attendance_review")
 
 
 def _open_document_work(session: Session, project_id: str) -> int:
-    """Open (not DONE / CANCELLED) department_work / head_brief tasks of a project."""
+    """Open (not DONE / CANCELLED) department_work / head_brief / attendance_review tasks."""
     return int(
         session.scalar(
             select(func.count())

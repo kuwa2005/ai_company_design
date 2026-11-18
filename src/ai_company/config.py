@@ -127,8 +127,26 @@ class HeadLLMConfig(BaseModel):
     max_wait_cycles: int = Field(default=3, ge=0)
 
 
+class AttendanceReviewConfig(BaseModel):
+    """招集見直し（attendance_review）: キーワード判定の出席者に、LLM が部を追加招集する.
+
+    キーワード判定は下限として残り、見直しは**追加だけ**できる（外すことはできない）。
+    見直し役は秘書室／推進課の読み取り専用の短命 Worker で、起動は Scheduler 経由。
+    失敗・解析不能・リトライ上限ではキーワード判定のまま進む。
+    """
+
+    enabled: bool = True
+    role: str = "project_coordinator"
+    max_additions: int = Field(default=2, ge=0)
+    estimated_cost: float = Field(default=0.05, ge=0.0)
+    max_retries: int = Field(default=1, ge=0)
+    # 実装完了後（自問ループ前）に、未着手のまま待たされた回数の上限。超えたら見直しなしで閉じる。
+    max_wait_cycles: int = Field(default=3, ge=0)
+
+
 class ExecutiveMeetingConfig(BaseModel):
     head_llm: HeadLLMConfig = Field(default_factory=HeadLLMConfig)
+    attendance_review: AttendanceReviewConfig = Field(default_factory=AttendanceReviewConfig)
 
 
 class SettingsConfig(BaseModel):

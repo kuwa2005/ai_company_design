@@ -1,7 +1,7 @@
 """Worker execution bookkeeping: start / finalize an execution and terminate the worker.
 
 ``_finalize_execution`` routes a finished execution by task kind (validation,
-judge, closure audits, head briefs, department work,
+judge, closure audits, head briefs, attendance review, department work,
 replan, implementation) and handles retries / escalation on failure."""
 
 from __future__ import annotations
@@ -220,6 +220,28 @@ def _finalize_execution(
                     "closure_verdict": (payload.get("closure_verdict") or "CLEAR"),
                 },
             )
+            return execution
+
+        if task.kind in {TaskKind.ATTENDANCE_REVIEW, "attendance_review"}:
+            # 招集見直し: 秘書側で検証し、追加招集した部の部門作業／部長所見を起票（追加のみ）
+            from ai_company.services.attendance_review import apply_attendance_review
+            from ai_company.services.tasks import refresh_dependents
+
+            apply_attendance_review(
+                session, task=task, payload=execution.result_json or {}, config=cfg
+            )
+            task.status = TaskStatus.DONE
+            session.flush()
+            record_audit(
+                session,
+                event_type="task_completed",
+                actor_type="worker",
+                actor_id=worker.id,
+                target_type="task",
+                target_id=task.id,
+                metadata={"execution_id": execution.id, "kind": "attendance_review"},
+            )
+            refresh_dependents(session, task.id)
             return execution
 
         if task.kind in {TaskKind.HEAD_BRIEF, "head_brief"}:
@@ -481,6 +503,20 @@ def _finalize_execution(
         from ai_company.services.head_briefs import close_failed_head_brief
 
         close_failed_head_brief(
+            session,
+            task=task,
+            reason=f"retries_exhausted:{task.retry_count}/{task.max_retries}",
+            config=cfg,
+        )
+        cg.record_failure_and_maybe_trip(session)
+    elif task.retry_count > task.max_retries and task.kind in {
+        TaskKind.ATTENDANCE_REVIEW,
+        "attendance_review",
+    }:
+        # 招集見直しも上申しない: キーワード判定の出席者のまま閉じる。
+        from ai_company.services.attendance_review import close_failed_attendance_review
+
+        close_failed_attendance_review(
             session,
             task=task,
             reason=f"retries_exhausted:{task.retry_count}/{task.max_retries}",

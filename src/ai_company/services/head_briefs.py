@@ -1,6 +1,6 @@
 """部長所見（head_brief）: department heads as short-lived, read-only workers.
 
-Optional and **off by default** (``settings.executive_meeting.head_llm``).
+On by default since 2026-11-18 (``settings.executive_meeting.head_llm``).
 
 Flow when enabled::
 
@@ -195,14 +195,89 @@ def issue_head_briefs(
     The department's template work orders are held in the task's
     ``constraints`` so that fallback can file exactly what "off" would have.
     """
+    cfg = config or load_config()
+    briefed, skipped = plan_head_briefs(minutes, cfg)
+    held = {
+        d: [o for o in minutes.work_orders if o.department_id == d] for d in briefed
+    }
+    return _file_head_briefs(
+        session,
+        project_id=project_id,
+        goal=minutes.goal,
+        briefed=briefed,
+        skipped=skipped,
+        held=held,
+        config=cfg,
+    )
+
+
+def issue_head_briefs_for_added(
+    session: Session,
+    *,
+    project_id: str,
+    goal: str,
+    departments: list[str],
+    orders: list[WorkOrder],
+    config: AppConfig | None = None,
+) -> HeadBriefIssue:
+    """Head briefs for departments summoned *after* the meeting (招集見直し).
+
+    Same rules as the meeting: only ``head_llm.departments``, only heads the
+    scheduler would dispatch, and ``max_heads_per_meeting`` counts the briefs
+    already filed for this project.
+    """
+    cfg = config or load_config()
+    head = cfg.settings.executive_meeting.head_llm
+    if not head.enabled:
+        return HeadBriefIssue()
+    already = {
+        _constraints(t).get("brief_for") for t in _brief_tasks(session, project_id)
+    }
+    room = max(0, head.max_heads_per_meeting - len(already))
+    briefed: list[str] = []
+    skipped: dict[str, str] = {}
+    for dept in DEPARTMENTS:
+        if dept.id not in departments or dept.id not in head.departments:
+            continue
+        if dept.id in already:
+            continue
+        ok, reason = head_role_dispatchable(cfg, dept.head_role)
+        if not ok:
+            skipped[dept.id] = f"部長を起動できない（{reason}）→ テンプレートで起票"
+            continue
+        if len(briefed) >= room:
+            skipped[dept.id] = f"上限: 1会議あたり部長 {head.max_heads_per_meeting} 名"
+            continue
+        briefed.append(dept.id)
+    held = {d: [o for o in orders if o.department_id == d] for d in briefed}
+    return _file_head_briefs(
+        session,
+        project_id=project_id,
+        goal=goal,
+        briefed=briefed,
+        skipped=skipped,
+        held=held,
+        config=cfg,
+    )
+
+
+def _file_head_briefs(
+    session: Session,
+    *,
+    project_id: str,
+    goal: str,
+    briefed: list[str],
+    skipped: dict[str, str],
+    held: dict[str, list[WorkOrder]],
+    config: AppConfig,
+) -> HeadBriefIssue:
     from ai_company.services.audit import record_audit
     from ai_company.services.department_orders import meeting_tag
     from ai_company.services.tasks import create_task
 
-    cfg = config or load_config()
+    cfg = config
     head = cfg.settings.executive_meeting.head_llm
     result = HeadBriefIssue()
-    briefed, skipped = plan_head_briefs(minutes, cfg)
     result.skipped = dict(skipped)
     tag = meeting_tag(project_id)
     existing = {
@@ -210,8 +285,8 @@ def issue_head_briefs(
     }
     for dept_id in briefed:
         dept = department_by_id(dept_id)
-        held = [o for o in minutes.work_orders if o.department_id == dept_id]
-        result.held[dept_id] = held
+        dept_held = held.get(dept_id, [])
+        result.held[dept_id] = dept_held
         if dept_id in existing:
             continue
         task = create_task(
@@ -220,7 +295,7 @@ def issue_head_briefs(
             priority=HEAD_BRIEF_PRIORITY,
             project_id=project_id,
             objective=(
-                f"Goal「{minutes.goal}」について、{dept.name_ja}の部長として"
+                f"Goal「{goal}」について、{dept.name_ja}の部長として"
                 "自部門が今回やるべき作業（最大2件）と懸念・社長への確認事項を判断せよ。"
             ),
             role_required=dept.head_role,
@@ -238,8 +313,8 @@ def issue_head_briefs(
             {
                 "meeting": tag,
                 "brief_for": dept_id,
-                "goal": minutes.goal,
-                "held_orders": [asdict(o) for o in held],
+                "goal": goal,
+                "held_orders": [asdict(o) for o in dept_held],
             },
         )
         session.flush()
@@ -255,7 +330,7 @@ def issue_head_briefs(
                 "meeting": tag,
                 "department_id": dept_id,
                 "head_role": dept.head_role,
-                "held_orders": [o.key for o in held],
+                "held_orders": [o.key for o in dept_held],
             },
         )
     for dept_id, reason in skipped.items():

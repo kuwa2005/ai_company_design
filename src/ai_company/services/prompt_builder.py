@@ -158,8 +158,17 @@ def _redacted_constraints(raw: str | None) -> str:
     return json.dumps(redact_obj(data), ensure_ascii=False)
 
 
+_KIND_PROMPTS = {"attendance_review": "attendance_reviewer.md"}
+
+
 def build_task_prompt(task: Task, *, session: Session | None = None) -> str:
-    role_prompt = load_role_prompt(task.role_required)
+    kind_prompt = _KIND_PROMPTS.get(str(task.kind))
+    kind_path = prompts_dir() / kind_prompt if kind_prompt else None
+    if kind_path is not None and kind_path.exists():
+        # The role prompt (e.g. 推進課の自問用) would ask for another JSON shape.
+        role_prompt = kind_path.read_text(encoding="utf-8")
+    else:
+        role_prompt = load_role_prompt(task.role_required)
     allowed = task.allowed_paths or []
     forbidden = task.forbidden_paths or []
     parent_ctx = _parent_context(session, task)
@@ -220,6 +229,9 @@ Coding-style JSON with changed_files=[] is expected.
     elif task.kind == "head_brief":
         extra = _head_brief_context(session, task)
 
+    elif task.kind == "attendance_review":
+        extra = _attendance_review_context(task)
+
     else:
         from ai_company.services.closure_loops import CLOSURE_KINDS
 
@@ -261,6 +273,43 @@ Supervisor: status, decision (RETRY|REASSIGN|ESCALATE), reason, instructions,
 target_role, confidence.
 Head brief: status, department_id, statement, commitments, concerns, open_questions,
 handoff_requests, work_orders, confidence (see the role prompt for the schema).
+Attendance review: status, summon[{{department_id, reason}}], summary, confidence.
+"""
+
+
+def _attendance_review_context(task: Task) -> str:
+    """Meeting context for the attendance review (read-only)."""
+    from ai_company.org import DEPARTMENTS
+
+    try:
+        data = json.loads(task.constraints or "{}")
+    except json.JSONDecodeError:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    attendees = set(data.get("attendees") or [])
+    candidates = [str(c) for c in data.get("candidates") or []]
+    reasons = data.get("absent_reasons") or {}
+
+    def _dept_line(d: Any) -> str:
+        handles = " / ".join(f"{s.name_ja}: {s.handles}" for s in d.sections)
+        return f"  - {d.id} ({d.name_ja}) — mission: {d.mission} — 課: {handles}"
+
+    present = "\n".join(_dept_line(d) for d in DEPARTMENTS if d.id in attendees) or "  (none)"
+    absent = "\n".join(
+        _dept_line(d) + f"\n    keyword decision: {single_line(reasons.get(d.id, ''))}"
+        for d in DEPARTMENTS
+        if d.id in candidates
+    ) or "  (none)"
+    return f"""
+---
+Executive Meeting Attendance Review (重役会議・招集見直し)
+Goal: {data.get("goal", "-")}
+Attending (decided by keywords; cannot be removed):
+{present}
+Absent candidates (summon only from these ids):
+{absent}
+Read-only: do NOT edit files. Output exactly one AttendanceReview JSON object.
 """
 
 

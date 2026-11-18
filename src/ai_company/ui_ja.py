@@ -35,6 +35,7 @@ KIND_JA = {
     "sales_audit": "営業点検",
     "maintenance_audit": "保守資料点検",
     "head_brief": "部長所見",
+    "attendance_review": "招集見直し",
 }
 
 ROLE_JA = {

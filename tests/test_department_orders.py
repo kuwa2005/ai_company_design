@@ -236,6 +236,8 @@ def test_closure_loop_waits_for_open_department_work(
     pid = result.project.id
     for t in result.tasks:
         t.status = TaskStatus.DONE
+    if result.attendance_review_task is not None:  # 招集見直しは別に待つ（test_attendance_review）
+        result.attendance_review_task.status = TaskStatus.DONE
     db_session.flush()
     assert maybe_spawn_closure_loop(db_session, project_id=pid) is None
     for t in _order_tasks(db_session, pid):

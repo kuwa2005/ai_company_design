@@ -40,6 +40,8 @@ class TaskKind(StrEnum):
     DEPARTMENT_WORK = "department_work"
     # 部長所見（短命の部長 Worker が会議の論点を判断する。既定オフ・読み取り専用）
     HEAD_BRIEF = "head_brief"
+    # 招集見直し（キーワード判定の出席者に LLM が部を追加招集する。読み取り専用）
+    ATTENDANCE_REVIEW = "attendance_review"
 
 
 class WorkerStatus(StrEnum):

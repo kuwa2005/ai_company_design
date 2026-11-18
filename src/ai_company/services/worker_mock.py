@@ -71,6 +71,10 @@ def run_mock_worker(
             from ai_company.services.head_briefs import build_mock_head_brief
 
             result = build_mock_head_brief(task)
+        elif task.kind in {TaskKind.ATTENDANCE_REVIEW, "attendance_review"}:
+            from ai_company.services.attendance_review import build_mock_attendance_review
+
+            result = build_mock_attendance_review(task)
         elif task.kind in {TaskKind.REPLAN, "replan"}:
             result = {
                 "status": "completed",

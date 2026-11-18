@@ -4,7 +4,9 @@ Flow (matches the company concept):
 
     社長がお願い → 秘書が部長を招集 → 重役会議 → 各部→課→担当に割り当て
 
-The meeting is deterministic and side-effect-light:
+The meeting is deterministic and side-effect-light (the keyword-based
+attendance is a floor: ``attendance_review`` may add departments later, and
+``head_briefs`` replace template statements with the heads' own briefs):
 
 - ``convene_executive_meeting`` is a pure function over a ``GoalPlan``.
   It decides attendees, each head's statement, the task→部/課 assignment,
@@ -337,6 +339,12 @@ def render_minutes_markdown(minutes: MeetingMinutes) -> str:
     lines += ["", "## 社長からの依頼", ""]
     lines += quote_goal_block(minutes.goal)
     lines += ["", "## 各部長の発言", ""]
+    lines += [
+        "> 以下は会議テンプレートによる定型の発言です。部長所見が有効な部は、部長 Worker の"
+        "所見を `<案件>_kickoff_heads.md` に、招集見直しの結果を "
+        "`<案件>_kickoff_attendance.md` に追記します。",
+        "",
+    ]
     for st in minutes.statements:
         dept = department_by_id(st.department_id)
         lines.append(f"### {dept.name_ja} — {format_role_label(st.head_role)}")
