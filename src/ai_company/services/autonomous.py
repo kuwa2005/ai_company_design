@@ -17,6 +17,7 @@ from ai_company.services.cost_governor import (
     TIME_WINDOW_DEFER_REASONS,
     BudgetWindowWait,
     budget_window_wait,
+    count_active_workers,
 )
 from ai_company.services.progress import emit as progress
 from ai_company.services.scheduler import SchedulerResult, run_once
@@ -46,6 +47,40 @@ class AutonomousResult:
     completed_project_ids: list[str] = field(default_factory=list)
     # Every release candidate created in this run (``release_candidate_id`` is the last).
     release_candidate_ids: list[str] = field(default_factory=list)
+    # Set when stopped_reason == "policy_denied": "<task id>: <reason>" lines.
+    policy_denials: list[str] = field(default_factory=list)
+
+
+# Cycles in a row where every candidate was denied by policy and nothing ran.
+# Nothing can change without a person (or a supervisor) acting, so looping on is
+# pure spin (live Cursor 2026-11-18: 64 cycles in ~2 s on one denied repair task).
+POLICY_DEADLOCK_CYCLES = 3
+
+
+def _policy_denials(session: Session, sched: SchedulerResult) -> list[str] | None:
+    """Denied-only cycle with no live worker → the denial lines, else None."""
+    if (
+        sched.started
+        or not sched.denied
+        or sched.deferred
+        or sched.throttled
+        or count_active_workers(session)
+    ):
+        return None
+    lines = [
+        f"{d.get('task_id', '?')}: {d.get('reason', '')}"
+        for d in sched.details
+        if d.get("result") == "DENY"
+    ]
+    return lines or ["(policy denied)"]
+
+
+def _policy_deadlock_progress(lines: list[str]) -> str:
+    shown = "  /  ".join(lines[:3])
+    return (
+        f"停止  理由=権限で起動できないタスクだけが残っています（{POLICY_DEADLOCK_CYCLES}"
+        f"サイクル連続）  {shown}"
+    )
 
 
 def _time_window_stall(
@@ -449,6 +484,7 @@ def continue_until_gate(
         + (f"  孤児回収={len(recovered)}" if recovered else "")
     )
 
+    denied_streak = 0
     for cycle in range(1, max_cycles + 1):
         result.cycles = cycle
 
@@ -562,6 +598,14 @@ def continue_until_gate(
                 progress("継続実行停止  理由=実行できるタスクがない")
             break
 
+        denials = _policy_denials(session, sched)
+        denied_streak = denied_streak + 1 if denials else 0
+        if denials and denied_streak >= POLICY_DEADLOCK_CYCLES:
+            result.stopped_reason = "policy_denied"
+            result.policy_denials = denials
+            progress("継続実行" + _policy_deadlock_progress(denials))
+            break
+
         # started==0 but READY remains (e.g. all THROTTLE) → keep looping
         if sched.started == 0 and sched.throttled > 0:
             progress("同時起動上限のため次サイクルへ（人の操作は不要）")
@@ -641,6 +685,7 @@ def run_autonomous(
         + (f"  孤児回収={len(recovered)}" if recovered else "")
     )
 
+    denied_streak = 0
     for cycle in range(1, max_cycles + 1):
         result.cycles = cycle
         # A rejected/reconsidered old approval must not leave the company idle.
@@ -694,6 +739,16 @@ def run_autonomous(
             result.project_status = project.status
             result.summaries.append(human_summary(session, project_id=project_id))
             progress("自動実行" + _budget_wait_progress(wait))
+            break
+
+        denials = _policy_denials(session, sched)
+        denied_streak = denied_streak + 1 if denials else 0
+        if denials and denied_streak >= POLICY_DEADLOCK_CYCLES:
+            result.stopped_reason = "policy_denied"
+            result.policy_denials = denials
+            result.project_status = project.status
+            result.summaries.append(exception_digest(session, project_id=project_id))
+            progress("自動実行" + _policy_deadlock_progress(denials))
             break
 
         if sched.started == 0 and _idle(session, project_id):

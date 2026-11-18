@@ -348,6 +348,7 @@ AuditEvent に追加した `event_type`:
 | event_type | 追加した項目 |
 |---|---|
 | `autonomous_run_finished` | `budget_wait_reason`（予算待ちで止まったときの理由。例: `hourly_max_runs`）、`release_candidate_ids`（この実行で作ったリリース候補すべて。`release_candidate_id` は従来どおり最後の1件）、`completed_project_ids` |
+| `task_reopened_by_supervisor` | `replan_id`、`supervisor_role`、`decision`（RETRY / REASSIGN）、`executor_role`、`kind`。読み取り専用タスクは修正タスクを作らずに差し戻す |
 | `closure_loop_finished` | `coerced_roles`（監査が指定したが開発部の実装担当ではなかったため `coding_worker` に置き換えたロール。伏せ字化）、`dropped_proposals`（1回あたり5件の上限を超えて捨てた件数）、`risk_capped`（critical を high に下げた提案の番号） |
 | `head_brief_fallback` | reason に `stalled_waiting:<status>:<n>cycles`（未着手のまま待機上限を超えた場合） |
 

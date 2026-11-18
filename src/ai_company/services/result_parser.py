@@ -142,6 +142,30 @@ def parse_structured_result(stdout: str) -> ParsedResult:
 
 _MAX_DOCUMENT_CHARS = 50_000
 
+_CAUSE_RE = re.compile(r"[^A-Za-z0-9_:./=-]+")
+
+
+def failure_cause_of(
+    result_json: Any, *, exit_code: int | None = None, timed_out: bool = False
+) -> str:
+    """Short machine cause of a failed run (parse / evidence / timeout / exit code).
+
+    Built only from orchestrator-generated keys and sanitised to a safe charset,
+    so it can go into escalation reasons and the 社長向け stuck explanation.
+    """
+    if timed_out:
+        return "timeout"
+    data = result_json if isinstance(result_json, dict) else {}
+    for key in ("evidence_error", "parse_error"):
+        value = data.get(key)
+        if value:
+            return _CAUSE_RE.sub("_", str(value))[:80]
+    if data.get("timed_out"):
+        return "timeout"
+    if exit_code not in (None, 0):
+        return f"exit_code={int(exit_code)}"
+    return ""
+
 
 def normalize_issues(value: Any, *, max_items: int = 50) -> list[str]:
     """Coerce untrusted worker ``issues`` into a list of strings.
@@ -483,7 +507,64 @@ def parse_head_brief_result(stdout: str) -> ParsedResult:
     return ParsedResult(ok=True, result=normalized, error=None)
 
 
-RoleParseKind = Literal["coding", "reviewer", "judge", "supervisor", "head"]
+RoleParseKind = Literal["coding", "reviewer", "judge", "supervisor", "head", "closure"]
+
+_CLOSURE_VERDICTS = frozenset({"CLEAR", "GAPS"})
+_MAX_CLOSURE_PROPOSALS = 20
+_MAX_PROPOSAL_FIELD_CHARS = 4_000
+
+
+def parse_closure_result(stdout: str) -> ParsedResult:
+    """Closure audits (本当にもう無いか？ etc.) answer with ``closure_verdict``.
+
+    The role prompts ask for ``{"closure_verdict", "summary", "proposed_tasks"}``
+    and no ``status``; requiring the coding ``status`` field failed every real
+    audit (live Cursor, 2026-11-18). ``status`` is optional here, but an explicit
+    ``failed`` is still a failure, and a missing/unknown verdict is never success.
+    The verdict and proposals are kept: dropping them turned GAPS into CLEAR.
+    """
+    data = _try_load(stdout)
+    if data is None:
+        return ParsedResult(ok=False, result=None, error="unparseable_or_missing_json")
+
+    status = str(data.get("status", "completed") or "completed").lower()
+    if status in {"done", "success", "ok", "complete"}:
+        status = "completed"
+    if status not in {"completed", "failed"}:
+        return ParsedResult(ok=False, result=data, error=f"invalid_status:{_err_val(status)}")
+
+    raw_verdict = data.get("closure_verdict", data.get("verdict"))
+    verdict = str(raw_verdict or "").strip().upper()
+    raw_proposals = data.get("proposed_tasks")
+    proposals: list[dict[str, Any]] = []
+    if isinstance(raw_proposals, list):
+        for item in raw_proposals[:_MAX_CLOSURE_PROPOSALS]:
+            if isinstance(item, dict):
+                proposals.append(
+                    {
+                        str(k)[:64]: (
+                            v[:_MAX_PROPOSAL_FIELD_CHARS] if isinstance(v, str) else v
+                        )
+                        for k, v in item.items()
+                        if isinstance(v, (str, int, float, bool)) or v is None
+                    }
+                )
+    if verdict not in _CLOSURE_VERDICTS:
+        return ParsedResult(
+            ok=False, result=data, error=f"invalid_closure_verdict:{_err_val(verdict)}"
+        )
+
+    normalized: dict[str, Any] = {
+        "status": status,
+        "closure_verdict": verdict,
+        "summary": str(data.get("summary") or ""),
+        "proposed_tasks": proposals,
+        "changed_files": data.get("changed_files") or [],
+        "issues": normalize_issues(data.get("issues") or data.get("unresolved_issues")),
+    }
+    if status != "completed":
+        return ParsedResult(ok=False, result=normalized, error="status_not_completed")
+    return ParsedResult(ok=True, result=normalized, error=None)
 
 
 def parse_for_kind(stdout: str, kind: RoleParseKind) -> ParsedResult:
@@ -495,4 +576,6 @@ def parse_for_kind(stdout: str, kind: RoleParseKind) -> ParsedResult:
         return parse_reviewer_result(stdout)
     if kind == "judge":
         return parse_judge_result(stdout)
+    if kind == "closure":
+        return parse_closure_result(stdout)
     return parse_structured_result(stdout)

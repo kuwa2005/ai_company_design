@@ -848,9 +848,18 @@ def human_summary(session: Session, *, project_id: str | None = None) -> str:
         [
             f"稼働中ワーカー: {active}",
             f"未承認の人員依頼: {staffing_open}",
-            f"本日の内部コスト: ${snap.daily_spent:.2f}（上限 ${snap.soft_limit:.2f}）",
-            f"月次使用率: {snap.soft_usage_ratio:.0%} "
-            f"（${snap.spent + snap.reserved:.2f} / ${snap.soft_limit:.2f}）",
+            *(
+                [
+                    f"本日の内部コスト: ${snap.daily_spent:.2f}（金額上限なし・購読モード）",
+                    f"月間の内部コスト: ${snap.spent + snap.reserved:.2f}",
+                ]
+                if snap.soft_limit <= 0
+                else [
+                    f"本日の内部コスト: ${snap.daily_spent:.2f}（上限 ${snap.soft_limit:.2f}）",
+                    f"月次使用率: {snap.soft_usage_ratio:.0%} "
+                    f"（${snap.spent + snap.reserved:.2f} / ${snap.soft_limit:.2f}）",
+                ]
+            ),
             (
                 "ハード上限の残り: 制限なし（購読モード）"
                 if snap.hard_limit <= 0
@@ -1005,16 +1014,18 @@ def responsibility_digest(session: Session, *, project_id: str | None = None) ->
             )
             .limit(1)
         )
+        cause = cause_ja(_last_failure_cause(session, t))
+        cause_txt = f"  原因={cause}" if cause else ""
         if replan:
             lines.append(
                 f"- 失敗「{t.title}」→ 直近上司 "
-                f"{format_role_label('engineering_manager')} が対応予定 "
-                f"（{replan.id}）"
+                f"{format_role_label(replan.role_required or 'engineering_manager')} "
+                f"が対応予定 （{replan.id}）{cause_txt}"
             )
         else:
             lines.append(
                 f"- 失敗「{t.title}」({t.id}) "
-                f"担当={format_role_label(t.role_required or 'coding_worker')}"
+                f"担当={format_role_label(t.role_required or 'coding_worker')}{cause_txt}"
             )
 
     for t in _scoped(TaskStatus.BLOCKED):
@@ -1088,10 +1099,77 @@ def _task_id_from_reason(reason: str) -> str | None:
     return m.group(1) if m else None
 
 
+_CAUSE_JA = {
+    "write_forbidden": "読み取り専用の担当がファイルを変更した（書き込み禁止違反）",
+    "changed_files_mismatch": "申告した変更ファイルと実際の差分が一致しない",
+    "manifest_tests_failed": "テストが失敗した",
+    "timeout": "時間切れ",
+    "unparseable_or_missing_json": "結果が JSON として読めない",
+}
+
+
+def cause_ja(cause: str) -> str:
+    """Japanese label for a machine failure cause (``failure_cause``)."""
+    c = (cause or "").strip()
+    if not c:
+        return ""
+    if c in _CAUSE_JA:
+        return _CAUSE_JA[c]
+    if c.startswith("missing_field:"):
+        return f"結果 JSON に必須項目 {c.split(':', 1)[1]} がない"
+    if c.startswith("invalid_"):
+        return f"結果 JSON の値が不正（{c}）"
+    if c.startswith("exit_code="):
+        return f"Cursor がエラー終了した（{c}）"
+    return c
+
+
+def _policy_denied_ready(ready: list[Task]) -> list[tuple[Task, str]]:
+    """READY tasks the policy engine will refuse (not approval-gated) with the reason."""
+    if not ready:
+        return []
+    from ai_company.services.policy_engine import evaluate_dispatch
+
+    cfg = load_config()
+    out: list[tuple[Task, str]] = []
+    for t in ready:
+        d = evaluate_dispatch(task=t, role=t.role_required or "coding_worker", config=cfg)
+        if not d.allowed and not d.requires_approval:
+            out.append((t, str(d.reason)))
+    return out
+
+
+def _last_failure_cause(session: Session, task: Task) -> str:
+    """Cause of the task's most recent failed execution ("" when unknown)."""
+    from ai_company.db.models import Execution
+    from ai_company.services.result_parser import failure_cause_of
+
+    last = session.scalar(
+        select(Execution)
+        .where(Execution.task_id == task.id)
+        .order_by(Execution.started_at.desc())
+        .limit(1)
+    )
+    if last is None or last.success:
+        return ""
+    return failure_cause_of(last.result_json, exit_code=last.exit_code)
+
+
+def _last_error_from_reason(reason: str) -> str:
+    import re
+
+    m = re.search(r"last_error=([A-Za-z0-9_:./=-]+)", reason or "")
+    return m.group(1) if m else ""
+
+
 def _explain_block_reason(reason: str) -> str:
     r = reason or ""
     task_id = _task_id_from_reason(r)
     suffix = f"（タスク: {task_id}）" if task_id else ""
+    cause = cause_ja(_last_error_from_reason(r))
+    if cause:
+        # The underlying cause first: "再計画回数を使い切った" alone hid it (live1).
+        suffix = f"直接の原因: {cause}。" + suffix
     if "manager_exhausted" in r:
         return (
             "直近の上司（実装マネージャー）の再計画回数も使い切ったため、"
@@ -1205,6 +1283,10 @@ def human_next_actions(
         "budget_wait": (
             "予算待ち（時間枠の上限）のため停止しました。"
             "同じ時間枠の中で再試行しても進まないため、空回りせずに止めています。"
+        ),
+        "policy_denied": (
+            "権限（permissions.yaml）で起動できないタスクだけが残ったため、"
+            "空回りせずに止めました。担当役割の見直しか権限の判断が必要です。"
         ),
     }
     if project_id:
@@ -1369,6 +1451,33 @@ def human_next_actions(
         lines.append(
             "すぐに進めたい場合は、上限を見直してください"
             "（config/budget.yaml の budget.hourly / budget.daily）。"
+        )
+        lines.append("状況確認だけするなら:")
+        lines.append("   ai-company status")
+        return "\n".join(lines)
+
+    # Priority 1.6: every READY task is denied by policy → a person must act.
+    # Telling the owner to "just continue" here only re-ran the spin (live2).
+    denied = _policy_denied_ready(ready)
+    if denied and len(denied) == len(ready) and not (throttled or review or deferred):
+        from ai_company.roles import format_role_label
+
+        lines.append(
+            "人の判断が必要です。次のタスクは担当役割に必要な権限が無く、起動できません:"
+        )
+        for t, why in denied[:5]:
+            lines.append(
+                f"   - {t.id}「{t.title}」 担当={format_role_label(t.role_required or '-')}"
+                f"  理由={why}"
+            )
+        lines.append("")
+        lines.append("担当を見直す（直近の上司に再計画させる）なら:")
+        for t, _ in denied[:5]:
+            lines.append(f"   ai-company task handoff-manager {t.id} --runner {runner}")
+        lines.append("")
+        lines.append(
+            "権限を広げる場合は config/permissions.yaml の変更になるため、"
+            "社内の承認手続きを経てください。"
         )
         lines.append("状況確認だけするなら:")
         lines.append("   ai-company status")

@@ -303,6 +303,7 @@ def start_cmd(
                 "max_cycles": "最大サイクル到達",
                 "all_implementation_done": "実装完了",
                 "budget_wait": "予算待ち（時間枠の上限）",
+                "policy_denied": "権限で起動できないタスクのみ（要判断）",
             }.get(auto.stopped_reason, auto.stopped_reason)
             console.print(
                 f"[cyan]自動実行[/cyan] サイクル={auto.cycles} "
@@ -732,6 +733,7 @@ def scheduler_continue(
             "max_cycles": "最大サイクル到達",
             "all_implementation_done": "実装すべて完了",
             "budget_wait": "予算待ち（時間枠の上限）",
+            "policy_denied": "権限で起動できないタスクのみ（要判断）",
         }.get(auto.stopped_reason, auto.stopped_reason)
         console.print(
             f"[cyan]継続実行[/cyan] 方式={runner_ja(runner)} "

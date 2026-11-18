@@ -18,8 +18,9 @@ from ai_company.services import cost_governor as cg
 from ai_company.services.audit import record_audit
 from ai_company.services.cursor_runner import run_cursor_cli
 from ai_company.services.escalation import escalate_blocked_task
+from ai_company.services.policy_engine import is_read_only_kind
 from ai_company.services.progress import emit as progress
-from ai_company.services.result_parser import RoleParseKind, parse_for_kind
+from ai_company.services.result_parser import RoleParseKind, failure_cause_of, parse_for_kind
 from ai_company.services.tasks import create_task
 from ai_company.services.validation import (
     finalize_judge,
@@ -36,6 +37,73 @@ RunnerKind = Literal["mock", "cursor"]
 
 def _utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def failure_cause(execution: Execution | None, *, timed_out: bool = False) -> str:
+    """Short machine cause of a failed run (see ``result_parser.failure_cause_of``)."""
+    if execution is None:
+        return "timeout" if timed_out else ""
+    return failure_cause_of(
+        execution.result_json, exit_code=execution.exit_code, timed_out=timed_out
+    )
+
+
+_GUIDANCE_CHARS = 1_500
+
+
+def _reopen_read_only_parent(
+    session: Session,
+    *,
+    parent: Task,
+    replan: Task,
+    worker: Worker,
+    decision: str,
+    target_role: str,
+    guidance: str,
+    config: AppConfig,
+) -> None:
+    from ai_company.services.policy_engine import evaluate_dispatch
+    from ai_company.services.redact import redact_text
+
+    role = parent.role_required or target_role
+    if target_role != role:
+        # REASSIGN only when the new role may run this read-only kind.
+        if evaluate_dispatch(task=parent, role=target_role, config=config).allowed:
+            role = target_role
+    note = redact_text(guidance.strip())[:_GUIDANCE_CHARS]
+    marker = "\n\n[上司の指示]\n"
+    base = (parent.objective or "").split(marker, 1)[0]
+    parent.objective = f"{base}{marker}{note}" if note else base
+    parent.role_required = role
+    parent.retry_count = 0
+    parent.status = TaskStatus.READY
+    session.flush()
+    record_audit(
+        session,
+        event_type="task_reopened_by_supervisor",
+        actor_type="worker",
+        actor_id=worker.id,
+        target_type="task",
+        target_id=parent.id,
+        metadata={
+            "replan_id": replan.id,
+            "supervisor_role": replan.role_required,
+            "decision": decision,
+            "executor_role": role,
+            "kind": str(parent.kind),
+        },
+    )
+    progress(
+        f"上司対応完了  {role_ja(replan.role_required)}が方針決定 → "
+        f"{role_ja(role)} へ差し戻し（読み取り専用のため修正タスクは作らない）  "
+        f"タスク={parent.id}"
+    )
+
+
+def _is_closure(task: Task) -> bool:
+    from ai_company.services.closure_loops import is_closure_task
+
+    return is_closure_task(task)
 
 
 def hire_worker(
@@ -320,6 +388,22 @@ def _finalize_execution(
                         candidate = role_def(requested_role)
                         if candidate.layer == "worker":
                             target_role = requested_role
+                    if is_read_only_kind(parent.kind):
+                        # Read-only work (closure audits, department work, …) has
+                        # nothing to "repair": a REPAIR task needs code.edit, which
+                        # these roles lack, so it was denied every cycle (live Cursor
+                        # 2026-11-18). Re-open the original task with the guidance.
+                        _reopen_read_only_parent(
+                            session,
+                            parent=parent,
+                            replan=task,
+                            worker=worker,
+                            decision=decision,
+                            target_role=target_role,
+                            guidance=guidance,
+                            config=cfg,
+                        )
+                        return execution
                     parent.retry_count = 0
                     repair = create_task(
                         session,
@@ -327,7 +411,7 @@ def _finalize_execution(
                         priority=min(100, parent.priority + 5),
                         project_id=parent.project_id,
                         objective=(
-                            f"Follow engineering_manager guidance.\n{guidance}"
+                            f"Follow {task.role_required} guidance.\n{guidance}"
                         ),
                         role_required=target_role,
                         estimated_cost=parent.estimated_cost,
@@ -470,10 +554,14 @@ def _finalize_execution(
         )
         cg.record_failure_and_maybe_trip(session)
     elif task.retry_count > task.max_retries:
+        reason = f"retries_exhausted:{task.retry_count}/{task.max_retries}"
+        cause = failure_cause(execution, timed_out=timed_out)
+        if cause:
+            reason = f"{reason} (last_error={cause})"
         escalate_blocked_task(
             session,
             task=task,
-            reason=f"retries_exhausted:{task.retry_count}/{task.max_retries}",
+            reason=reason,
             config=cfg,
         )
     else:
@@ -797,6 +885,8 @@ def run_cursor_worker(
         parse_kind = "supervisor"
     elif task.kind in {TaskKind.HEAD_BRIEF, "head_brief"}:
         parse_kind = "head"
+    elif _is_closure(task):
+        parse_kind = "closure"
     else:
         parse_kind = "coding"
 
@@ -820,6 +910,10 @@ def run_cursor_worker(
     }
     if capture.timed_out:
         result_json["timed_out"] = True
+    if parsed.error and not parsed.ok:
+        # Keep the cause even when the parser returned partial data (e.g.
+        # missing_field:status): the supervisor and `status` show it.
+        result_json["parse_error"] = parsed.error
     result_json["parse_kind"] = parse_kind
 
     reported = []
